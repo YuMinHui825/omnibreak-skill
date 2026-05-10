@@ -39,11 +39,30 @@ sudo apt install -y gdbserver gdb-multiarch
 
 ## Install
 
+### Standalone CLI
+
 ```bash
 git clone https://github.com/YuMinHui825/omnibreak-skill.git
 cd omnibreak-skill
 npm install && npm link
 ```
+
+### Claude Code Integration
+
+```bash
+# Method 1: Add via skill command (recommended)
+/skill add omnibreak https://github.com/YuMinHui825/omnibreak-skill.git
+
+# Method 2: Manual registration
+cp SKILL.md ~/.claude/skills/omnibreak.md
+```
+
+After installation, Claude can:
+
+- `omnibreak launch --target <IP> --binary <PATH>` — deploy and start debugging
+- `omnibreak break --file main.c --line 42` — set breakpoints
+- `omnibreak continue` + `omnibreak status` — run and inspect
+- `omnibreak crash` — capture crash backtraces
 
 ## Quick Start
 
