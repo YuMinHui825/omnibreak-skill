@@ -14,6 +14,8 @@ let mapper: SourceMapper = new SourceMapper({});
 let sessionStarted = false;
 let firstContinue = false;
 
+function esc(s: string): string { return s.replace(/'/g, "'\\''"); }
+
 function ok(data?: Partial<CliOutput>): CliOutput { return { ok: true, ...data }; }
 function fail(msg: string, code?: CliOutput['code'], hint?: string): CliOutput {
   return { ok: false, error: msg, code, hint };
@@ -28,18 +30,21 @@ async function handleLaunch(body: any): Promise<CliOutput> {
   if (body.deploySource) {
     log('info', `Deploying ${body.deploySource} → ${body.target}:${body.binary}`);
     const sc = body.pwd
-      ? `sshpass -p '${body.pwd}' scp -o StrictHostKeyChecking=no ${body.deploySource} ${body.user}@${body.target}:${body.binary}`
-      : `scp -o StrictHostKeyChecking=no ${body.deploySource} ${body.user}@${body.target}:${body.binary}`;
+      ? `sshpass -p '${esc(body.pwd)}' scp -o StrictHostKeyChecking=no ${esc(body.deploySource)} ${esc(body.user)}@${esc(body.target)}:${esc(body.binary)}`
+      : `scp -o StrictHostKeyChecking=no ${esc(body.deploySource)} ${esc(body.user)}@${esc(body.target)}:${esc(body.binary)}`;
     require('child_process').execSync(sc, { timeout: 60000 });
   }
 
   // Start gdbserver
-  try { sshExec(c, '"pkill -x gdbserver 2>/dev/null || true"'); } catch {}
-  sshExec(c, `"rm -f /tmp/omnibreak_output.log; setsid stdbuf -o0 gdbserver --multi :${body.port || 2345} >/tmp/omnibreak_output.log 2>&1 &"`);
-  await new Promise(r => setTimeout(r, 1500));
+  const sudo = body.sudo ? 'sudo ' : '';
+  try { sshExec(c, `"${sudo}pkill -x gdbserver 2>/dev/null || true"`); } catch {}
+  if (!body.skipGdbserver) {
+    sshExec(c, `"rm -f /tmp/omnibreak_output.log; setsid stdbuf -o0 ${sudo}gdbserver --multi :${body.port || 2345} >/tmp/omnibreak_output.log 2>&1 &"`);
+    await new Promise(r => setTimeout(r, 1500));
+  }
 
   // Start GDB
-  gdb = new GdbMiClient({ gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch', sshRemote: { host: body.target, user: body.user || 'root', port: 22 } });
+  gdb = new GdbMiClient({ gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch', sshRemote: { host: body.target, user: body.user || 'root', port: 22, password: body.pwd } });
   await gdb.init();
   await gdb.sendCommand(body.nonStop ? '-gdb-set non-stop on' : '-gdb-set non-stop off');
   await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
@@ -71,15 +76,24 @@ async function handleAttach(body: any): Promise<CliOutput> {
   // Resolve PID
   let pid = String(body.pid || '');
   if (!pid && body.processName) {
-    pid = sshExec(c, `"pgrep -f '${body.processName}' | head -1"`).trim();
+    pid = sshExec(c, `"pgrep -f '${esc(body.processName)}' | head -1"`).trim();
   }
   if (!pid) return fail(`Process not found`, 'SESSION');
 
-  try { sshExec(c, '"pkill -x gdbserver 2>/dev/null || true"'); } catch {}
-  sshExec(c, `"setsid stdbuf -o0 gdbserver --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &"`);
+  // Deploy before attach
+  if (body.deploySource) {
+    const sc = body.pwd
+      ? `sshpass -p '${esc(body.pwd)}' scp -o StrictHostKeyChecking=no ${esc(body.deploySource)} ${esc(body.user)}@${esc(body.target)}:${esc(body.binary)}`
+      : `scp -o StrictHostKeyChecking=no ${esc(body.deploySource)} ${esc(body.user)}@${esc(body.target)}:${esc(body.binary)}`;
+    require('child_process').execSync(sc, { timeout: 60000 });
+  }
+
+  const sudo = body.sudo ? 'sudo ' : '';
+  try { sshExec(c, `"${sudo}pkill -x gdbserver 2>/dev/null || true"`); } catch {}
+  sshExec(c, `"setsid stdbuf -o0 ${sudo}gdbserver --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &"`);
   await new Promise(r => setTimeout(r, 1500));
 
-  gdb = new GdbMiClient({ gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch', sshRemote: { host: body.target, user: body.user || 'root', port: 22 } });
+  gdb = new GdbMiClient({ gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch', sshRemote: { host: body.target, user: body.user || 'root', port: 22, password: body.pwd } });
   await gdb.init();
   if (body.solibPath) await gdb.sendCommand(`-interpreter-exec console "set solib-search-path ${body.solibPath}"`);
   if (body.binary) await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
@@ -98,6 +112,7 @@ async function handleStop(): Promise<CliOutput> {
 async function handleBreak(file: string, line: number, condition?: string): Promise<CliOutput> {
   if (!gdb) return fail('No session', 'SESSION');
   try {
+    await gdb.sendCommand('-gdb-set breakpoint pending on').catch(() => {});
     const loc = `-f ${file}:${line}`;
     const cmd = condition ? `-break-insert ${loc} -c "${condition}"` : `-break-insert ${loc}`;
     const result = await gdb.sendCommand(cmd);

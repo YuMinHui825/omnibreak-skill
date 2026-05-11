@@ -15,7 +15,7 @@ export declare interface GdbMiClient {
 export interface GdbLaunchOptions {
   gdbPath: string;
   /** If set, run GDB on remote host via SSH */
-  sshRemote?: { host: string; user: string; port?: number };
+  sshRemote?: { host: string; user: string; port?: number; password?: string };
   /** If set, connect GDB to this host:port (local or remote) */
   connectTarget?: { host: string; port: number };
 }
@@ -45,16 +45,28 @@ export class GdbMiClient extends EventEmitter {
     // Determine: local or SSH?
     if (this.opts.sshRemote) {
       const r = this.opts.sshRemote;
-      const sshArgs = [
-        '-o', 'StrictHostKeyChecking=no',
-        '-o', 'ServerAliveInterval=30',
-        ...(r.port ? ['-p', String(r.port)] : []),
-        `${r.user}@${r.host}`,
-        this.opts.gdbPath,
-        ...args,
-      ];
-      // log("info", `Launching GDB via SSH: ssh ${sshArgs.join(' ')}`);
-      this.process = spawn('ssh', sshArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+      if (r.password) {
+        const sshArgs = [
+          '-p', r.password, 'ssh',
+          '-o', 'StrictHostKeyChecking=no',
+          '-o', 'ServerAliveInterval=30',
+          ...(r.port ? ['-p', String(r.port)] : []),
+          `${r.user}@${r.host}`,
+          this.opts.gdbPath,
+          ...args,
+        ];
+        this.process = spawn('sshpass', sshArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+      } else {
+        const sshArgs = [
+          '-o', 'StrictHostKeyChecking=no',
+          '-o', 'ServerAliveInterval=30',
+          ...(r.port ? ['-p', String(r.port)] : []),
+          `${r.user}@${r.host}`,
+          this.opts.gdbPath,
+          ...args,
+        ];
+        this.process = spawn('ssh', sshArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+      }
     } else {
       // log("info", `Launching GDB: ${this.opts.gdbPath} ${args.join(' ')}`);
       this.process = spawn(this.opts.gdbPath, args, { stdio: ['pipe', 'pipe', 'pipe'] });

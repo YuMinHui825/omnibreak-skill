@@ -112,9 +112,11 @@ omnibreak stop
 omnibreak launch --target <IP> --binary <PATH>
   --user <name>          SSH user (default: root)
   --port <n>             gdbserver port (default: 2345)
-  --pwd <pass>           SSH password (optional, prefer key auth)
+  --pwd <pass>           SSH password (for scp, gdbserver, and GDB)
   --deploy-source <path> Local binary to SCP before launch
   --source-map <json>    Compile-path → local-path mapping
+  --sudo                 Use sudo for gdbserver commands
+  --skip-gdbserver       Skip starting gdbserver (if already running)
 ```
 
 ### Attach Options
@@ -124,6 +126,9 @@ omnibreak attach --target <IP> --process <name>|--pid <n>
   --binary <path>        .so or binary for debug symbols
   --solib-path <dir>     Remote .so search path
   --source-map <json>    Source path mapping
+  --deploy-source <path> Local binary to SCP before attach
+  --pwd <pass>           SSH password (for scp, gdbserver, and GDB)
+  --sudo                 Use sudo for gdbserver commands
 ```
 
 ## JSON Output

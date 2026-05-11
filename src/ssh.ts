@@ -7,12 +7,14 @@ export interface SshConfig {
   password?: string;
 }
 
+function esc(s: string): string { return s.replace(/'/g, "'\\''"); }
+
 /** Build SSH prefix for execSync commands */
 function prefix(c: SshConfig): string {
   if (c.password) {
-    return `sshpass -p '${c.password}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPersist=60s -p ${c.port} ${c.user}@${c.host}`;
+    return `sshpass -p '${esc(c.password)}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPersist=60s -p ${c.port} ${esc(c.user)}@${esc(c.host)}`;
   }
-  return `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPersist=60s -p ${c.port} ${c.user}@${c.host}`;
+  return `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPersist=60s -p ${c.port} ${esc(c.user)}@${esc(c.host)}`;
 }
 
 /** Run a command on the remote target */
@@ -23,7 +25,7 @@ export function sshExec(c: SshConfig, cmd: string): string {
 /** SCP a file to the remote target */
 export function scpDeploy(source: string, c: SshConfig, dest: string): void {
   const sc = c.password
-    ? `sshpass -p '${c.password}' scp -o StrictHostKeyChecking=no -P ${c.port} ${source} ${c.user}@${c.host}:${dest}`
-    : `scp -o StrictHostKeyChecking=no -P ${c.port} ${source} ${c.user}@${c.host}:${dest}`;
+    ? `sshpass -p '${esc(c.password)}' scp -o StrictHostKeyChecking=no -P ${c.port} ${esc(source)} ${esc(c.user)}@${esc(c.host)}:${esc(dest)}`
+    : `scp -o StrictHostKeyChecking=no -P ${c.port} ${esc(source)} ${esc(c.user)}@${esc(c.host)}:${esc(dest)}`;
   execSync(sc, { timeout: 60000, encoding: 'utf8' });
 }

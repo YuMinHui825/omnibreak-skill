@@ -41,6 +41,8 @@ prog.command('launch').description('Start a debug session')
   .option('--pwd <pass>', 'SSH password')
   .option('--source-map <json>', 'Source path mapping')
   .option('--deploy-source <path>', 'Local binary to SCP')
+  .option('--sudo', 'Use sudo for gdbserver commands')
+  .option('--skip-gdbserver', 'Skip starting gdbserver (already running)')
   .action(o => daemonCall('launch', { ...o, line: undefined }).then(console.log));
 
 prog.command('attach').description('Attach to running process')
@@ -53,6 +55,8 @@ prog.command('attach').description('Attach to running process')
   .option('--binary <path>', '.so or binary for symbols')
   .option('--solib-path <dir>', '.so search path')
   .option('--source-map <json>', 'Source path mapping')
+  .option('--deploy-source <path>', 'Local binary to SCP before attach')
+  .option('--sudo', 'Use sudo for gdbserver commands')
   .action(o => daemonCall('attach', { ...o, processName: o.process }).then(console.log));
 
 prog.command('break').description('Set breakpoint')
@@ -67,7 +71,7 @@ prog.command('step').alias('s').description('Step into').action(() => daemonCall
 prog.command('status').description('Get debug state').action(() => daemonCall('status').then(console.log));
 prog.command('crash').description('Crash backtrace').action(() => daemonCall('crash').then(console.log));
 prog.command('eval').description('Evaluate expression').argument('<expr>').action(e => daemonCall('eval', { expr: e }).then(console.log));
-prog.command('gdb').description('Raw GDB/MI command').argument('<cmd...>').action((cmd: string, _opts: any, cmdObj: any) => { const all = cmdObj.args.join(' '); daemonCall('gdb', { cmd: all }).then(console.log); });
+prog.command('gdb').description('Raw GDB/MI command (e.g. gdb -break-delete 1)').allowUnknownOption().argument('<cmd...>').action((_cmd: string, _opts: any, cmdObj: any) => { const all = cmdObj.args.join(' '); daemonCall('gdb', { cmd: all }).then(console.log); });
 prog.command('stop').description('End session').action(() => daemonCall('stop').then(console.log));
 prog.command('health').description('Check daemon').action(() => daemonCall('health').then(console.log));
 
@@ -79,9 +83,10 @@ prog.command('deploy').description('SCP file to target')
   .option('--user <name>', 'SSH user', 'root')
   .option('--pwd <pass>', 'SSH password')
   .action(o => {
+    const esc = (s: string) => s.replace(/'/g, "'\\''");
     const sc = o.pwd
-      ? `sshpass -p '${o.pwd}' scp -o StrictHostKeyChecking=no ${o.source} ${o.user}@${o.target}:${o.dest}`
-      : `scp -o StrictHostKeyChecking=no ${o.source} ${o.user}@${o.target}:${o.dest}`;
+      ? `sshpass -p '${esc(o.pwd)}' scp -o StrictHostKeyChecking=no ${esc(o.source)} ${esc(o.user)}@${esc(o.target)}:${esc(o.dest)}`
+      : `scp -o StrictHostKeyChecking=no ${esc(o.source)} ${esc(o.user)}@${esc(o.target)}:${esc(o.dest)}`;
     require('child_process').execSync(sc, { timeout: 60000 });
     console.log(JSON.stringify({ ok: true, result: `Deployed ${o.source} → ${o.target}:${o.dest}` }));
   });

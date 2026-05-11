@@ -93,9 +93,11 @@ omnibreak stop
 omnibreak launch --target <IP> --binary <PATH>
   --user <name>          SSH 用户（默认 root）
   --port <n>             gdbserver 端口（默认 2345）
-  --pwd <pass>           SSH 密码（可选，推荐密钥认证）
+  --pwd <pass>           SSH 密码（scp、gdbserver、GDB 通用）
   --deploy-source <path> 本地二进制，启动前自动 SCP
   --source-map <json>    编译路径 → 本地路径映射
+  --sudo                 使用 sudo 执行 gdbserver 命令
+  --skip-gdbserver       跳过 gdbserver 启动（已运行时）
 ```
 
 ### Attach 选项
@@ -105,6 +107,9 @@ omnibreak attach --target <IP> --process <name>|--pid <n>
   --binary <path>        .so 或二进制文件（用于加载调试符号）
   --solib-path <dir>     远程 .so 搜索路径
   --source-map <json>    源码路径映射
+  --deploy-source <path> 本地二进制，attach 前自动 SCP
+  --pwd <pass>           SSH 密码（scp、gdbserver、GDB 通用）
+  --sudo                 使用 sudo 执行 gdbserver 命令
 ```
 
 ## JSON 输出

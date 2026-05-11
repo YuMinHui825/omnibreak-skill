@@ -47,12 +47,15 @@ omnibreak health              Check if daemon is alive
 ### Debug Lifecycle
 ```
 omnibreak launch  --target <IP> --binary <PATH> [--user root] [--port 2345]
-                  [--deploy-source <LOCAL>] [--source-map '{".":"/work"}']
+                  [--pwd <pass>] [--deploy-source <LOCAL>]
+                  [--source-map '{".":"/work"}'] [--sudo] [--skip-gdbserver]
 
 omnibreak attach  --target <IP> --process <NAME>|--pid <N>
-                  [--binary <PATH>] [--solib-path <DIR>]
+                  [--binary <PATH>] [--solib-path <DIR>] [--deploy-source <LOCAL>]
+                  [--pwd <pass>] [--sudo]
 
 omnibreak break   --file <PATH> --line <N> [--condition "x>100"]
+                  (pending breakpoints auto-enabled for .so debugging)
 omnibreak continue | c        Resume
 omnibreak next    | n         Step over
 omnibreak step    | s         Step into
@@ -89,11 +92,11 @@ When investigating a crash or bug, Claude follows this pattern:
 # 1. Ensure daemon is running
 omnibreak health || omnibreak daemon &
 
-# 2. Deploy and start
+# 2. Deploy and start (--pwd for password auth, --sudo if non-root SSH)
 omnibreak launch --target 192.168.1.100 --binary /app/myapp --user root \
   --deploy-source ./build_arm64/myapp
 
-# 3. Set breakpoint at suspected location
+# 3. Set breakpoint at suspected location (pending breakpoints auto-enabled)
 omnibreak break --file src/handler.c --line 342
 
 # 4. Run until breakpoint
