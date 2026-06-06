@@ -3,8 +3,8 @@ import * as fs from 'fs';
 import { GdbMiClient, GdbLaunchOptions } from './gdbMiClient';
 import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from './gdbMiParser';
 import { SourceMapper } from './sourceMapper';
-import { CliOutput, ThreadInfo, FrameInfo, VarInfo, log } from './types';
-import { SshConfig, sshExec } from './ssh';
+import { CliOutput, ThreadInfo, FrameInfo, VarInfo, StatsResult, LeakResult, log } from './types';
+import { SshConfig, sshExec, scpDeploy } from './ssh';
 
 const SOCK = '/tmp/omnibreak-daemon.sock';
 const PORT = 49200;
@@ -29,10 +29,7 @@ async function handleLaunch(body: any): Promise<CliOutput> {
   // Deploy
   if (body.deploySource) {
     log('info', `Deploying ${body.deploySource} → ${body.target}:${body.binary}`);
-    const sc = body.pwd
-      ? `sshpass -p '${esc(body.pwd)}' scp -o StrictHostKeyChecking=no ${esc(body.deploySource)} ${esc(body.user)}@${esc(body.target)}:${esc(body.binary)}`
-      : `scp -o StrictHostKeyChecking=no ${esc(body.deploySource)} ${esc(body.user)}@${esc(body.target)}:${esc(body.binary)}`;
-    require('child_process').execSync(sc, { timeout: 60000 });
+    scpDeploy(body.deploySource, c, body.binary);
   }
 
   // Start gdbserver
@@ -81,12 +78,7 @@ async function handleAttach(body: any): Promise<CliOutput> {
   if (!pid) return fail(`Process not found`, 'SESSION');
 
   // Deploy before attach
-  if (body.deploySource) {
-    const sc = body.pwd
-      ? `sshpass -p '${esc(body.pwd)}' scp -o StrictHostKeyChecking=no ${esc(body.deploySource)} ${esc(body.user)}@${esc(body.target)}:${esc(body.binary)}`
-      : `scp -o StrictHostKeyChecking=no ${esc(body.deploySource)} ${esc(body.user)}@${esc(body.target)}:${esc(body.binary)}`;
-    require('child_process').execSync(sc, { timeout: 60000 });
-  }
+  if (body.deploySource) scpDeploy(body.deploySource, c, body.binary);
 
   const sudo = body.sudo ? 'sudo ' : '';
   try { sshExec(c, `"${sudo}pkill -x gdbserver 2>/dev/null || true"`); } catch {}
@@ -206,6 +198,84 @@ async function handleEval(expr: string): Promise<CliOutput> {
   return ok({ result: m ? m[1] : result.data });
 }
 
+async function handleStats(data: any): Promise<CliOutput> {
+  const c: SshConfig = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
+  const pid = parseInt(data.pid) || 0;
+  if (!pid) return fail('PID required', 'SESSION');
+  try {
+    const out = sshExec(c, `"ps -p ${pid} -o %cpu=,rss=,vsz=,nlwp=,stat= --no-headers 2>/dev/null || echo '0 0 0 0 ?'"`).trim();
+    const vals = out.split(/\s+/);
+    const rssKB = parseInt(vals[1]) || 0;
+    const result: StatsResult = {
+      pid,
+      cpuPercent: parseFloat(vals[0]) || 0,
+      rssMB: Math.round(rssKB / 1024 * 10) / 10,
+      vszMB: Math.round((parseInt(vals[2]) || 0) / 1024),
+      threadCount: parseInt(vals[3]) || 0,
+      state: vals[4] || '?',
+    };
+    return ok({ result: JSON.stringify(result) });
+  } catch (e: any) { return fail(`Stats failed: ${e.message}`); }
+}
+
+async function handleLeaks(data: any): Promise<CliOutput> {
+  const c: SshConfig = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
+  const pid = parseInt(data.pid) || 0;
+  if (!pid) return fail('PID required', 'SESSION');
+  try {
+    // Read smaps for heap/stack/data
+    const smaps = sshExec(c, `"cat /proc/${pid}/smaps 2>/dev/null"`);
+    const status = sshExec(c, `"grep -E '^(Vm|Rss)' /proc/${pid}/status 2>/dev/null"`);
+    const st: Record<string,number> = {};
+    status.split('\n').forEach(line => {
+      const m = line.match(/^(\w+):\s+(\d+)/);
+      if(m) st[m[1].toLowerCase()] = parseInt(m[2]);
+    });
+    let heapKB=0, stackKB=0, curAddr='', curSize=0;
+    smaps.split('\n').forEach(line => {
+      const am = line.match(/^([0-9a-f]+)-/);
+      if(am){if(curAddr.includes('[heap]'))heapKB+=curSize;if(curAddr.includes('[stack]'))stackKB+=curSize;curAddr=line;curSize=0}
+      const sm = line.match(/^Size:\s+(\d+)/); if(sm)curSize=parseInt(sm[1]);
+    });
+    if(curAddr.includes('[heap]'))heapKB+=curSize;
+    if(curAddr.includes('[stack]'))stackKB+=curSize;
+    // Rolling samples via remote file
+    const sampleFile = `/tmp/omnibreak-leak-${pid}.json`;
+    let samples: number[] = [];
+    try { samples = JSON.parse(sshExec(c, `"cat ${sampleFile} 2>/dev/null || echo '[]'"`).trim()); } catch {}
+    if(!Array.isArray(samples)) samples = [];
+    samples.push(heapKB);
+    if(samples.length > 60) samples = samples.slice(-60);
+    const sampleJson = JSON.stringify(samples);
+    sshExec(c, `"printf '%s' '${sampleJson.replace(/'/g, "'\\''")}' > ${sampleFile}"`);
+    // Risk detection
+    let risk: LeakResult['risk'] = 'none';
+    if(samples.length >= 10) {
+      const n = samples.length;
+      const firstQ = samples.slice(0, Math.floor(n/4)).reduce((a,b)=>a+b,0) / Math.floor(n/4);
+      const lastQ = samples.slice(-Math.floor(n/4)).reduce((a,b)=>a+b,0) / Math.floor(n/4);
+      const growth = lastQ - firstQ;
+      let growing = 0;
+      for(let i=1;i<n;i++) if(samples[i] > samples[0]) growing++;
+      const growthRatio = growing / (n-1);
+      if(growth > 128 && growthRatio > 0.7) risk = 'high';
+      else if(growth > 64 && growthRatio > 0.5) risk = 'medium';
+      else if(growth > 0 && growthRatio > 0.4) risk = 'low';
+    }
+    const result: LeakResult = {
+      pid,
+      heapKB, stackKB,
+      dataKB: (st.vmdata || 0),
+      rssKB: (st.vmrss || 0),
+      vszKB: (st.vmsize || 0),
+      heapDeltaKB: samples.length > 1 ? heapKB - samples[0] : 0,
+      risk,
+      sampleCount: samples.length,
+    };
+    return ok({ result: JSON.stringify(result) });
+  } catch (e: any) { return fail(`Leak scan failed: ${e.message}`); }
+}
+
 // ═══ HTTP SERVER ═══
 if (require.main === module) {
   const server = http.createServer(async (req, res) => {
@@ -231,6 +301,8 @@ if (require.main === module) {
           case 'crash': result = await handleCrash(); break;
           case 'eval': result = await handleEval(String(data.expr)); break;
           case 'gdb': result = await handleGdb(String(data.cmd)); break;
+          case 'stats': result = await handleStats(data); break;
+          case 'leaks': result = await handleLeaks(data); break;
           case 'health': result = ok({ result: 'daemon running' }); break;
         }
       } catch (e: any) { result = fail(e.message); }

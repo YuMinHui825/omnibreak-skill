@@ -2,6 +2,8 @@
 
 # OmniBreak Skill
 
+[:cn: 中文文档](README_CN.md)
+
 CLI tool and Claude Code Skill for remote Linux debugging via GDB/gdbserver.  
 Automate bug investigation — deploy, attach, breakpoints, crash capture.
 
@@ -102,6 +104,8 @@ omnibreak stop
 | `crash` | Crash backtrace (500 frames) |
 | `eval` | Evaluate C expression |
 | `gdb` | Raw GDB/MI command |
+| `stats` | Process stats — CPU%, RSS, VSZ, thread count, state |
+| `leaks` | Memory leak detection — heap tracking, risk escalation |
 | `deploy` | SCP file to target (standalone, no session needed) |
 | `stop` | End session & cleanup |
 | `health` | Check if daemon is running |
@@ -211,3 +215,12 @@ MIT
 ## Author
 
 [shibu](https://github.com/YuMinHui825)
+
+---
+
+<p align="center">
+  <b>If you find OmniBreak useful, please give it a ⭐</b><br/><br/>
+  <img src="IMG_9667.JPG" width="200" alt="Alipay" /><br/>
+  <sub>Like this project? <b>Buy me a coffee ☕</b></sub><br/>
+  <a href="https://github.com/YuMinHui825/omnibreak-skill">Star on GitHub</a>
+</p>

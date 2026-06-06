@@ -2,6 +2,8 @@
 
 # OmniBreak Skill
 
+[English](README.md)
+
 远程 Linux 调试 CLI 工具 + Claude Code Skill。  
 通过 GDB/gdbserver 自动化 bug 排查——部署、attach、断点、崩溃捕获。
 
@@ -83,6 +85,8 @@ omnibreak stop
 | `crash` | 崩溃堆栈（500 帧） |
 | `eval` | 求值 C 表达式 |
 | `gdb` | 原始 GDB/MI 命令 |
+| `stats` | 进程统计 — CPU%、RSS、VSZ、线程数、状态 |
+| `leaks` | 内存泄漏检测 — 堆内存追踪，风险等级评估 |
 | `deploy` | SCP 文件到目标机（独立命令，无需 session） |
 | `stop` | 结束会话并清理 |
 | `health` | 检查 daemon 是否在运行 |
@@ -191,4 +195,13 @@ MIT
 
 ## 作者
 
-[shibu](https://github.com/YuMinHui825/omnibreak-skill)
+[shibu](https://github.com/YuMinHui825)
+
+---
+
+<p align="center">
+  <b>如果觉得有用，点个 ⭐ 支持一下</b><br/><br/>
+  <img src="IMG_9667.JPG" width="200" alt="支付宝" /><br/>
+  <sub>感兴趣可以打赏 <b>请喝杯咖啡 ☕</b></sub><br/>
+  <a href="https://github.com/YuMinHui825/omnibreak-skill">去 GitHub 点 Star</a>
+</p>

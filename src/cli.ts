@@ -74,6 +74,18 @@ prog.command('eval').description('Evaluate expression').argument('<expr>').actio
 prog.command('gdb').description('Raw GDB/MI command (e.g. gdb -break-delete 1)').allowUnknownOption().argument('<cmd...>').action((_cmd: string, _opts: any, cmdObj: any) => { const all = cmdObj.args.join(' '); daemonCall('gdb', { cmd: all }).then(console.log); });
 prog.command('stop').description('End session').action(() => daemonCall('stop').then(console.log));
 prog.command('health').description('Check daemon').action(() => daemonCall('health').then(console.log));
+prog.command('stats').description('Process stats (CPU/RSS/VSZ/threads/state)')
+  .requiredOption('--pid <n>', 'Process ID')
+  .requiredOption('--target <host>', 'Target Linux IP')
+  .option('--user <name>', 'SSH user', 'root')
+  .option('--pwd <pass>', 'SSH password')
+  .action(o => daemonCall('stats', o).then(console.log));
+prog.command('leaks').description('Memory leak detection')
+  .requiredOption('--pid <n>', 'Process ID')
+  .requiredOption('--target <host>', 'Target Linux IP')
+  .option('--user <name>', 'SSH user', 'root')
+  .option('--pwd <pass>', 'SSH password')
+  .action(o => daemonCall('leaks', o).then(console.log));
 
 // Standalone deploy
 prog.command('deploy').description('SCP file to target')

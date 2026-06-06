@@ -48,6 +48,29 @@ export interface SessionState {
   startedAt: string;
 }
 
+/** Stats result */
+export interface StatsResult {
+  pid: number;
+  cpuPercent: number;
+  rssMB: number;
+  vszMB: number;
+  threadCount: number;
+  state: string;
+}
+
+/** Leak report */
+export interface LeakResult {
+  pid: number;
+  heapKB: number;
+  stackKB: number;
+  dataKB: number;
+  rssKB: number;
+  vszKB: number;
+  heapDeltaKB: number;
+  risk: 'none' | 'low' | 'medium' | 'high';
+  sampleCount: number;
+}
+
 /** Minimal logger — writes to stderr with timestamp */
 export function log(level: string, msg: string): void {
   const ts = new Date().toISOString();
