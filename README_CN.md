@@ -41,11 +41,34 @@ sudo apt install -y gdbserver gdb-multiarch
 
 ## 安装
 
+### 独立 CLI
+
 ```bash
 git clone https://github.com/YuMinHui825/omnibreak-skill.git
 cd omnibreak-skill
 npm install && npm link
 ```
+
+### Claude Code 集成
+
+```bash
+# 方法 1：通过 skill 命令添加（推荐）
+/skill add omnibreak https://github.com/YuMinHui825/omnibreak-skill.git
+
+# 方法 2：手动注册
+cp SKILL.md ~/.claude/skills/omnibreak.md
+```
+
+安装后，Claude 可以自主完成整个调试闭环——不需要你手动操作任何命令：
+
+1. **主动询问缺失信息** — 目标 IP、SSH 密码、二进制路径、源码位置、构建命令等
+2. **编译 + 部署** — 自动编译带 `-g` 调试符号，SCP 到远程
+3. **断点 + 执行** — 设断点、启动、单步、查看变量
+4. **崩溃自动分析** — 捕获完整调用栈，定位 `file:line`
+5. **内存泄漏检测** — 持续采样堆内存，自动判断风险等级
+6. **性能监控** — CPU%、RSS、VSZ、线程数实时查看
+7. **修复代码** — 分析根因，修改源码，重新编译部署验证
+8. **生成诊断报告** — 汇总问题、修复方案、验证结果
 
 ## 快速开始
 
@@ -177,6 +200,23 @@ omnibreak stop
 omnibreak attach --target 192.168.1.100 --process myservice --binary ./libservice.so
 omnibreak status
 omnibreak stop
+```
+
+### 内存泄漏检测
+
+```bash
+# 每 5 秒采样一次，观察 risk 变化
+omnibreak leaks --pid 12345 --target 192.168.1.100 --user root
+# → {heapKB:512, heapDeltaKB:384, risk:"high", sampleCount:30}
+# risk: none → low → medium → high 逐级上升
+```
+
+### 进程性能监控
+
+```bash
+omnibreak stats --pid 12345 --target 192.168.1.100 --user root
+# → {cpuPercent:45.2, rssMB:18.5, vszMB:128, threadCount:4, state:"R"}
+# state: R=运行 S=睡眠 D=磁盘等待 T=调试暂停 Z=僵尸
 ```
 
 ## Troubleshooting

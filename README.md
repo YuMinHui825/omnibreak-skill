@@ -59,12 +59,16 @@ npm install && npm link
 cp SKILL.md ~/.claude/skills/omnibreak.md
 ```
 
-After installation, Claude can:
+After installation, Claude can **autonomously** complete the full debug cycle — no manual commands needed:
 
-- `omnibreak launch --target <IP> --binary <PATH>` — deploy and start debugging
-- `omnibreak break --file main.c --line 42` — set breakpoints
-- `omnibreak continue` + `omnibreak status` — run and inspect
-- `omnibreak crash` — capture crash backtraces
+1. **Asks for missing info** — target IP, SSH password, binary path, source location, build command
+2. **Compiles + deploys** — builds with `-g` debug symbols, SCPs to target
+3. **Breakpoints + execution** — sets breakpoints, runs, steps, inspects variables
+4. **Auto crash analysis** — captures full 500-frame backtrace with exact file:line
+5. **Memory leak detection** — continuous heap sampling with risk escalation (none→low→medium→high)
+6. **Performance monitoring** — real-time CPU%, RSS, VSZ, thread count
+7. **Fixes code** — analyzes root cause, edits source, rebuilds, redeploys, re-verifies
+8. **Generates diagnostic reports** — summarizes problem, fix, and verification results
 
 ## Quick Start
 
@@ -196,6 +200,23 @@ omnibreak stop
 omnibreak attach --target 192.168.1.100 --process myservice --binary ./libservice.so
 omnibreak status
 omnibreak stop
+```
+
+### Memory leak detection
+
+```bash
+# Sample every ~5s, watch risk escalate
+omnibreak leaks --pid 12345 --target 192.168.1.100 --user root
+# → {heapKB:512, heapDeltaKB:384, risk:"high", sampleCount:30}
+# risk: none → low → medium → high
+```
+
+### Process monitoring
+
+```bash
+omnibreak stats --pid 12345 --target 192.168.1.100 --user root
+# → {cpuPercent:45.2, rssMB:18.5, vszMB:128, threadCount:4, state:"R"}
+# state: R=running S=sleeping D=disk-wait T=tracing-stop Z=zombie
 ```
 
 ## Troubleshooting
