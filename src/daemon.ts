@@ -1,12 +1,11 @@
 import * as http from 'http';
-import * as fs from 'fs';
 import { GdbMiClient, GdbLaunchOptions } from './gdbMiClient';
 import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from './gdbMiParser';
 import { SourceMapper } from './sourceMapper';
-import { CliOutput, ThreadInfo, FrameInfo, VarInfo, StatsResult, LeakResult, log } from './types';
+import { CliOutput, ThreadInfo, FrameInfo, VarInfo, StatsResult, LeakResult, TraceCaptureResult, log } from './types';
 import { SshConfig, sshExec, scpDeploy } from './ssh';
+import { traceCapture } from './trace';
 
-const SOCK = '/tmp/omnibreak-daemon.sock';
 const PORT = 49200;
 
 let gdb: GdbMiClient | null = null;
@@ -198,6 +197,26 @@ async function handleEval(expr: string): Promise<CliOutput> {
   return ok({ result: m ? m[1] : result.data });
 }
 
+async function handleTraceCapture(data: any): Promise<CliOutput> {
+  const c: SshConfig = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
+  const durationSec = parseInt(data.duration) || 10;
+  const outputPath = data.output || './trace.pftrace';
+
+  if (!data.target) return fail('Target host required', 'CONNECTION');
+
+  try {
+    const result: TraceCaptureResult = traceCapture(c, {
+      durationSec,
+      outputPath,
+      events: data.events || undefined,
+      sudo: !!data.sudo,
+      sudoPwd: data.sudoPwd || data.pwd,
+      startCmd: data.startCmd,
+    });
+    return ok({ result: JSON.stringify(result) });
+  } catch (e: any) { return fail(`Trace capture failed: ${e.message}`); }
+}
+
 async function handleStats(data: any): Promise<CliOutput> {
   const c: SshConfig = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
   const pid = parseInt(data.pid) || 0;
@@ -303,6 +322,7 @@ if (require.main === module) {
           case 'gdb': result = await handleGdb(String(data.cmd)); break;
           case 'stats': result = await handleStats(data); break;
           case 'leaks': result = await handleLeaks(data); break;
+          case 'trace-capture': result = await handleTraceCapture(data); break;
           case 'health': result = ok({ result: 'daemon running' }); break;
         }
       } catch (e: any) { result = fail(e.message); }
@@ -311,10 +331,7 @@ if (require.main === module) {
     });
   });
 
-  // Clean up stale socket
-  try { fs.unlinkSync(SOCK); } catch {}
-  server.listen(SOCK, () => {
-    fs.chmodSync(SOCK, '666');
-    log('info', `Daemon listening on ${SOCK}`);
+  server.listen(PORT, '127.0.0.1', () => {
+    log('info', `Daemon listening on 127.0.0.1:${PORT}`);
   });
 }

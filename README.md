@@ -46,8 +46,11 @@ sudo apt install -y gdbserver gdb-multiarch
 ```bash
 git clone https://github.com/YuMinHui825/omnibreak-skill.git
 cd omnibreak-skill
-npm install && npm link
+npm install --production && npm link
 ```
+
+Pre-compiled JavaScript is included — no TypeScript compilation needed.  
+Dev setup (only for contributors who modify TypeScript): `npm install && npm run compile`.
 
 ### Claude Code Integration
 
@@ -110,6 +113,7 @@ omnibreak stop
 | `gdb` | Raw GDB/MI command |
 | `stats` | Process stats — CPU%, RSS, VSZ, thread count, state |
 | `leaks` | Memory leak detection — heap tracking, risk escalation |
+| `trace` | Capture Perfetto trace from remote target (system-wide) |
 | `deploy` | SCP file to target (standalone, no session needed) |
 | `stop` | End session & cleanup |
 | `health` | Check if daemon is running |
@@ -138,6 +142,25 @@ omnibreak attach --target <IP> --process <name>|--pid <n>
   --pwd <pass>           SSH password (for scp, gdbserver, and GDB)
   --sudo                 Use sudo for gdbserver commands
 ```
+
+### Trace Options
+
+```
+omnibreak trace --target <IP>
+  --user <name>           SSH user (default: root)
+  --pwd <pass>            SSH password
+  --duration <seconds>    Trace duration (default: 10)
+  --output <path>         Local output path (default: ./trace.pftrace)
+  --events <list>         Ftrace events (default: auto-detect sched + GPU + process events)
+  --sudo                  Use sudo for ftrace access (required for kernel events)
+  --sudo-pwd <pass>       Sudo password (defaults to SSH password)
+  --start-cmd <cmd>       Command to run on remote AFTER trace starts
+```
+
+Uses [Perfetto tracebox](https://perfetto.dev) — deploys automatically on first use (~20MB one-time download).  
+Output is a `.pftrace` file that can be opened in [ui.perfetto.dev](https://ui.perfetto.dev).
+
+**GPU auto-detection:** On first capture, OmniBreak probes `/sys/kernel/tracing/events/` for GPU ftrace sources (i915, mali, kgsl, amdgpu, virtio_gpu, drm, etc.) and auto-includes them. Multi-GPU systems (integrated + discrete) are fully supported.
 
 ## JSON Output
 
@@ -219,6 +242,23 @@ omnibreak stats --pid 12345 --target 192.168.1.100 --user root
 # state: R=running S=sleeping D=disk-wait T=tracing-stop Z=zombie
 ```
 
+### System trace capture
+
+```bash
+# Capture system-wide trace (auto-detects GPU events)
+omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo
+
+# Capture trace and run a specific command during the trace window
+omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
+  --start-cmd "/app/myapp"
+
+# Custom events override auto-detection
+omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
+  --events "sched/sched_switch i915/i915_gem_request_submit"
+```
+
+The trace captures CPU scheduling + GPU events (auto-detected) of ALL processes, plus process snapshots and system info. Use the `--start-cmd` flag to ensure short-lived programs are captured (trace starts first, then the command runs).
+
 ## Troubleshooting
 
 | Problem | Solution |
@@ -228,6 +268,9 @@ omnibreak stats --pid 12345 --target 192.168.1.100 --user root
 | "Process not found" | Process name must match (uses `pgrep -f`) |
 | "Operation not permitted" (attach) | `sudo sysctl -w kernel.yama.ptrace_scope=0` |
 | No debug symbols | Compile with `-g` flag |
+| Trace is empty | Ensure `--sudo` is used (ftrace requires root) |
+| Process not in trace | Use `--start-cmd` so trace starts before the process |
+| No GPU events in trace | GPU events only fire when GPU is active (not in headless VMs). Check daemon stderr for `Detected GPU:` lines |
 
 ## License
 

@@ -1,5 +1,5 @@
 node_modules/
-out/
 *.js.map
 /tmp/
 .vscode/
+*.pftrace

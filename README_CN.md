@@ -46,8 +46,11 @@ sudo apt install -y gdbserver gdb-multiarch
 ```bash
 git clone https://github.com/YuMinHui825/omnibreak-skill.git
 cd omnibreak-skill
-npm install && npm link
+npm install --production && npm link
 ```
+
+已包含预编译的 JavaScript，无需 TypeScript 编译。  
+开发环境（仅修改 TypeScript 的贡献者需要）：`npm install && npm run compile`。
 
 ### Claude Code 集成
 
@@ -110,6 +113,7 @@ omnibreak stop
 | `gdb` | 原始 GDB/MI 命令 |
 | `stats` | 进程统计 — CPU%、RSS、VSZ、线程数、状态 |
 | `leaks` | 内存泄漏检测 — 堆内存追踪，风险等级评估 |
+| `trace` | 采集 Perfetto 系统级 trace（全系统） |
 | `deploy` | SCP 文件到目标机（独立命令，无需 session） |
 | `stop` | 结束会话并清理 |
 | `health` | 检查 daemon 是否在运行 |
@@ -138,6 +142,25 @@ omnibreak attach --target <IP> --process <name>|--pid <n>
   --pwd <pass>           SSH 密码（scp、gdbserver、GDB 通用）
   --sudo                 使用 sudo 执行 gdbserver 命令
 ```
+
+### Trace 选项
+
+```
+omnibreak trace --target <IP>
+  --user <name>           SSH 用户（默认 root）
+  --pwd <pass>            SSH 密码
+  --duration <seconds>    Trace 采集时长（默认 10）
+  --output <path>         本地输出路径（默认 ./trace.pftrace）
+  --events <list>         Ftrace 事件（默认：自动检测 调度 + GPU + 进程事件）
+  --sudo                  使用 sudo 执行（ftrace 需要 root 权限）
+  --sudo-pwd <pass>       Sudo 密码（默认同 SSH 密码）
+  --start-cmd <cmd>       Trace 启动后在远程执行的命令
+```
+
+基于 [Perfetto tracebox](https://perfetto.dev) — 首次自动部署（约 20MB 一次性下载）。  
+输出 `.pftrace` 文件，拖入 [ui.perfetto.dev](https://ui.perfetto.dev) 即可可视化查看。
+
+**GPU 自动检测：** 首次采集时自动探测远程 `/sys/kernel/tracing/events/` 中的 GPU ftrace 源（i915、mali、kgsl、amdgpu、virtio_gpu、drm 等）并自动加入。核显 + 独显双卡环境完整支持。
 
 ## JSON 输出
 
@@ -219,6 +242,23 @@ omnibreak stats --pid 12345 --target 192.168.1.100 --user root
 # state: R=运行 S=睡眠 D=磁盘等待 T=调试暂停 Z=僵尸
 ```
 
+### 系统级 Trace 采集
+
+```bash
+# 采集全系统 trace（自动检测 GPU 事件）
+omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo
+
+# 采集 trace 并在期间运行指定命令
+omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
+  --start-cmd "/app/myapp"
+
+# 自定义事件（覆盖自动检测）
+omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
+  --events "sched/sched_switch i915/i915_gem_request_submit"
+```
+
+Trace 捕获目标机上**所有进程**的 CPU 调度 + GPU 事件（自动检测）、进程快照和系统信息。对于短时运行的程序，用 `--start-cmd` 让 trace 先启动、再执行命令，确保进程的完整生命周期被捕获。
+
 ## Troubleshooting
 
 | 问题 | 解决 |
@@ -228,6 +268,9 @@ omnibreak stats --pid 12345 --target 192.168.1.100 --user root
 | "Process not found" | 进程名必须匹配（使用 `pgrep -f`） |
 | "Operation not permitted"（attach 时） | `sudo sysctl -w kernel.yama.ptrace_scope=0` |
 | 无调试符号 | 编译时加 `-g` 参数 |
+| Trace 采集为空 | 确保使用 `--sudo`（ftrace 需要 root 权限） |
+| 进程不在 trace 中 | 使用 `--start-cmd` 让 trace 先启动再执行目标命令 |
+| Trace 中无 GPU 事件 | GPU 事件仅在 GPU 活跃时触发（无头 VM 中不会产生）。查看 daemon stderr 中的 `Detected GPU:` 日志确认 |
 
 ## License
 

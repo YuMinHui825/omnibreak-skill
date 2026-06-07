@@ -58,6 +58,14 @@ export interface StatsResult {
   state: string;
 }
 
+/** Trace capture result */
+export interface TraceCaptureResult {
+  output: string;
+  sizeBytes: number;
+  remoteHost: string;
+  durationSec: number;
+}
+
 /** Leak report */
 export interface LeakResult {
   pid: number;

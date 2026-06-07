@@ -2,14 +2,14 @@
 import { Command } from 'commander';
 import { request } from 'http';
 
-const SOCK = '/tmp/omnibreak-daemon.sock';
 const PORT = 49200;
 
 function daemonCall(cmd: string, data?: any): Promise<any> {
   return new Promise((resolve, reject) => {
     const body = data ? JSON.stringify(data) : '';
     const opts = {
-      socketPath: SOCK,
+      host: '127.0.0.1',
+      port: PORT,
       path: '/' + cmd,
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(body)) },
@@ -86,8 +86,19 @@ prog.command('leaks').description('Memory leak detection')
   .option('--user <name>', 'SSH user', 'root')
   .option('--pwd <pass>', 'SSH password')
   .action(o => daemonCall('leaks', o).then(console.log));
+prog.command('trace').description('Capture Perfetto trace from remote target')
+  .requiredOption('--target <host>', 'Target Linux IP')
+  .option('--user <name>', 'SSH user', 'root')
+  .option('--pwd <pass>', 'SSH password')
+  .option('--duration <seconds>', 'Trace duration', '10')
+  .option('--output <path>', 'Local output path', './trace.pftrace')
+  .option('--events <list>', 'Ftrace events (default: sched + process events)')
+  .option('--sudo', 'Use sudo for ftrace access')
+  .option('--sudo-pwd <pass>', 'Sudo password (defaults to SSH password)')
+  .option('--start-cmd <cmd>', 'Command to run on remote after trace starts')
+  .action(o => daemonCall('trace-capture', o).then(console.log));
 
-// Standalone deploy
+// Standalone deploy (works cross-platform: sshpass/scp on Unix, ssh2 SFTP fallback on Windows)
 prog.command('deploy').description('SCP file to target')
   .requiredOption('--source <path>', 'Local file')
   .requiredOption('--target <host>', 'Target IP')
@@ -95,11 +106,9 @@ prog.command('deploy').description('SCP file to target')
   .option('--user <name>', 'SSH user', 'root')
   .option('--pwd <pass>', 'SSH password')
   .action(o => {
-    const esc = (s: string) => s.replace(/'/g, "'\\''");
-    const sc = o.pwd
-      ? `sshpass -p '${esc(o.pwd)}' scp -o StrictHostKeyChecking=no ${esc(o.source)} ${esc(o.user)}@${esc(o.target)}:${esc(o.dest)}`
-      : `scp -o StrictHostKeyChecking=no ${esc(o.source)} ${esc(o.user)}@${esc(o.target)}:${esc(o.dest)}`;
-    require('child_process').execSync(sc, { timeout: 60000 });
+    const { scpDeploy } = require('./ssh');
+    const c = { host: o.target, user: o.user || 'root', port: 22, password: o.pwd };
+    scpDeploy(o.source, c, o.dest);
     console.log(JSON.stringify({ ok: true, result: `Deployed ${o.source} → ${o.target}:${o.dest}` }));
   });
 

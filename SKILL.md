@@ -25,8 +25,10 @@ Before starting, ask the user for any information you don't already have:
 ```bash
 git clone https://github.com/YuMinHui825/omnibreak-skill.git
 cd omnibreak-skill
-npm install && npm link
+npm install --production && npm link
 ```
+
+Pre-compiled — no build step needed.
 
 Register in Claude Code:
 ```
@@ -99,6 +101,18 @@ omnibreak leaks   --pid <N> --target <IP> [--user root] [--pwd <pass>]
     Use to: run multiple times during execution, watch risk escalate
 ```
 
+### System Trace
+```
+omnibreak trace   --target <IP> [--user root] [--pwd <pass>]
+                  [--duration 10] [--output ./trace.pftrace]
+                  [--events <list>] [--sudo] [--sudo-pwd <pass>]
+                  [--start-cmd <cmd>]
+    Returns: {output, sizeBytes, remoteHost, durationSec}
+    Captures system-wide Perfetto trace: CPU scheduling, GPU events (auto-detected),
+    process snapshots, system info. Output .pftrace viewable at ui.perfetto.dev.
+    Use --start-cmd to capture short-lived programs (trace starts first).
+```
+
 ### Utility
 ```
 omnibreak deploy  --source <LOCAL> --target <IP> --dest <PATH>
@@ -112,6 +126,7 @@ Every command returns JSON to stdout. Parse `ok` field first, then inspect the d
 {"ok":true,"status":"stopped","file":"main.c","line":42,"threads":[...],"vars":[...]}
 {"ok":true,"pid":12345,"cpuPercent":45.2,"rssMB":18.5,"vszMB":128,"threadCount":4,"state":"R"}
 {"ok":true,"heapKB":512,"heapDeltaKB":384,"risk":"high","sampleCount":30}
+{"ok":true,"result":"{\"output\":\"./trace.pftrace\",\"sizeBytes\":35697,\"remoteHost\":\"192.168.1.100\",\"durationSec\":10}"}
 {"ok":false,"error":"Connection refused","code":"CONNECTION","hint":"Check gdbserver"}
 ```
 
@@ -174,6 +189,23 @@ Error codes: `CONNECTION`, `AUTH`, `TIMEOUT`, `BINARY`, `SESSION`, `PTRACE`
    - state=Z → zombie process (bug: missing wait() call)
 3. Cross-reference with omnibreak status to see which functions are active
 4. Report findings to user with specific file:line recommendations
+```
+
+## System Trace Capture (Perfetto)
+
+```
+1. Capture system-wide trace: omnibreak trace --target <IP> --sudo --duration 10
+   → Returns {output: "./trace.pftrace", sizeBytes: 35000, ...}
+   → GPU events are auto-detected from /sys/kernel/tracing/events/
+2. For short-lived programs, use --start-cmd so trace starts first:
+   omnibreak trace --target <IP> --sudo --duration 10 --start-cmd "/app/myapp"
+3. Open the .pftrace file in https://ui.perfetto.dev to view the timeline
+4. Use trace_processor_shell for SQL analysis if needed
+5. Use this to:
+   - Find CPU scheduling bottlenecks (which threads hog CPU)
+   - Correlate GPU command submission with CPU work
+   - See process/thread lifecycle with sched_process_exec/fork/exit events
+   - Get memory snapshots per process
 ```
 
 ## Multi-Process Debugging
