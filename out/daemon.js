@@ -151,35 +151,76 @@ async function handleBreak(file, line, condition) {
         return fail(`Breakpoint failed: ${e.message}`);
     }
 }
+function waitForStop(timeoutMs = 10000) {
+    return new Promise(resolve => {
+        const onStop = () => { resolve(); gdb?.removeListener('stopped', onStop); };
+        gdb.on('stopped', onStop);
+        setTimeout(() => { gdb?.removeListener('stopped', onStop); resolve(); }, timeoutMs);
+    });
+}
 async function handleContinue() {
     if (!gdb)
         return fail('No session', 'SESSION');
     if (firstContinue) {
         firstContinue = false;
         await gdb.sendCommand('-exec-run');
-        // Wait for stop
-        await new Promise(resolve => {
-            const onStop = () => { resolve(); gdb?.removeListener('stopped', onStop); };
-            gdb.on('stopped', onStop);
-            setTimeout(() => { gdb?.removeListener('stopped', onStop); resolve(); }, 5000);
-        });
+        await waitForStop();
         await new Promise(r => setTimeout(r, 300));
         return await handleStatus();
     }
     await gdb.sendCommand('-exec-continue');
-    return ok();
+    await waitForStop();
+    await new Promise(r => setTimeout(r, 300));
+    return await handleStatus();
 }
 async function handleNext() {
     if (!gdb)
         return fail('No session', 'SESSION');
     await gdb.sendCommand('-exec-next');
-    return ok();
+    await waitForStop();
+    await new Promise(r => setTimeout(r, 300));
+    return await handleStatus();
 }
 async function handleStep() {
     if (!gdb)
         return fail('No session', 'SESSION');
     await gdb.sendCommand('-exec-step');
-    return ok();
+    await waitForStop();
+    await new Promise(r => setTimeout(r, 300));
+    return await handleStatus();
+}
+async function handleWatch(expr, type) {
+    if (!gdb)
+        return fail('No session', 'SESSION');
+    try {
+        let cmd = '-break-watch';
+        if (type === 'read')
+            cmd += ' -r';
+        else if (type === 'access')
+            cmd += ' -a';
+        const result = await gdb.sendCommand(`${cmd} ${expr}`);
+        const info = (0, gdbMiParser_1.parseBreakpoint)(result.data);
+        return ok({ breakpoints: [{ id: parseInt(info.number || '0'), file: expr, line: 0, verified: true }] });
+    }
+    catch (e) {
+        return fail(`Watchpoint failed: ${e.message}`);
+    }
+}
+async function handleLogs(data) {
+    const c = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
+    const path = data.path;
+    if (!path)
+        return fail('Log path required', 'SESSION');
+    try {
+        const lines = parseInt(data.lines) || 100;
+        const out = (0, ssh_1.sshExec)(c, `"tail -n ${lines} ${path} 2>/dev/null || echo 'LOG_NOT_FOUND'"`);
+        if (out.includes('LOG_NOT_FOUND'))
+            return fail(`Log file not found: ${path}`);
+        return ok({ result: JSON.stringify({ path, lines: out.trim().split('\n') }) });
+    }
+    catch (e) {
+        return fail(`Logs failed: ${e.message}`);
+    }
 }
 async function handleGdb(cmd) {
     if (!gdb)
@@ -256,6 +297,7 @@ async function handleTraceCapture(data) {
             sudo: !!data.sudo,
             sudoPwd: data.sudoPwd || data.pwd,
             startCmd: data.startCmd,
+            heapProfile: data.heapProfile,
         });
         return ok({ result: JSON.stringify(result) });
     }
@@ -415,6 +457,12 @@ if (require.main === module) {
                         break;
                     case 'gdb':
                         result = await handleGdb(String(data.cmd));
+                        break;
+                    case 'watch':
+                        result = await handleWatch(String(data.expr), String(data.type || ''));
+                        break;
+                    case 'logs':
+                        result = await handleLogs(data);
                         break;
                     case 'stats':
                         result = await handleStats(data);

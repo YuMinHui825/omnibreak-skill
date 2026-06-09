@@ -72,6 +72,10 @@ prog.command('status').description('Get debug state').action(() => daemonCall('s
 prog.command('crash').description('Crash backtrace').action(() => daemonCall('crash').then(console.log));
 prog.command('eval').description('Evaluate expression').argument('<expr>').action(e => daemonCall('eval', { expr: e }).then(console.log));
 prog.command('gdb').description('Raw GDB/MI command (e.g. gdb -break-delete 1)').allowUnknownOption().argument('<cmd...>').action((_cmd: string, _opts: any, cmdObj: any) => { const all = cmdObj.args.join(' '); daemonCall('gdb', { cmd: all }).then(console.log); });
+prog.command('watch').description('Set watchpoint on variable/expression')
+  .requiredOption('--expr <expression>', 'Variable or expression to watch')
+  .option('--type <mode>', 'read, write (default), or access', 'write')
+  .action(o => daemonCall('watch', o).then(console.log));
 prog.command('stop').description('End session').action(() => daemonCall('stop').then(console.log));
 prog.command('health').description('Check daemon').action(() => daemonCall('health').then(console.log));
 prog.command('stats').description('Process stats (CPU/RSS/VSZ/threads/state)')
@@ -96,9 +100,17 @@ prog.command('trace').description('Capture Perfetto trace from remote target')
   .option('--sudo', 'Use sudo for ftrace access')
   .option('--sudo-pwd <pass>', 'Sudo password (defaults to SSH password)')
   .option('--start-cmd <cmd>', 'Command to run on remote after trace starts')
+  .option('--heap-profile <process>', 'Enable heapprofd for process name (native heap profiling)')
   .action(o => daemonCall('trace-capture', o).then(console.log));
 
 // Standalone deploy (works cross-platform: sshpass/scp on Unix, ssh2 SFTP fallback on Windows)
+prog.command('logs').description('Read remote log file')
+  .requiredOption('--target <host>', 'Target Linux IP')
+  .requiredOption('--path <path>', 'Remote log file path')
+  .option('--lines <n>', 'Number of lines to read', '100')
+  .option('--user <name>', 'SSH user', 'root')
+  .option('--pwd <pass>', 'SSH password')
+  .action(o => daemonCall('logs', o).then(console.log));
 prog.command('deploy').description('SCP file to target')
   .requiredOption('--source <path>', 'Local file')
   .requiredOption('--target <host>', 'Target IP')

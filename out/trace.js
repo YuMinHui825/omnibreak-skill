@@ -83,9 +83,9 @@ function detectGpuEvents(c, sudo, sudoPwd) {
     return events;
 }
 /** Build a Perfetto text config that includes ftrace + process snapshot */
-function buildTraceConfig(durationSec, events) {
+function buildTraceConfig(durationSec, events, heapProfile) {
     const eventList = events.split(' ').filter(e => e).map(e => `      ftrace_events: "${e}"`).join('\n');
-    return [
+    const parts = [
         'buffers { size_kb: 4096 }',
         'data_sources {',
         '  config {',
@@ -114,13 +114,12 @@ function buildTraceConfig(durationSec, events) {
         '    }',
         '  }',
         '}',
-        'data_sources {',
-        '  config {',
-        '    name: "linux.system_info"',
-        '  }',
-        '}',
-        `duration_ms: ${durationSec * 1000}`,
-    ].join('\n');
+    ];
+    if (heapProfile) {
+        parts.push('data_sources {', '  config {', '    name: "android.heapprofd"', '    heapprofd_config {', `      process_cmdline: "${heapProfile}"`, '      sampling_interval_bytes: 4096', '      block_client: true', '    }', '  }', '}');
+    }
+    parts.push('data_sources {', '  config {', '    name: "linux.system_info"', '  }', '}', `duration_ms: ${durationSec * 1000}`);
+    return parts.join('\n');
 }
 const SUMMARY_SQL = {
     top_cpu_threads: "SELECT name, SUM(dur)/1e6 AS cpu_ms FROM sched " +
@@ -285,7 +284,7 @@ function traceCapture(c, opts) {
         events += ' ' + gpuEvents.join(' ');
         (0, types_1.log)('info', `Including GPU events: ${gpuEvents.join(' ')}`);
     }
-    const config = buildTraceConfig(opts.durationSec, events);
+    const config = buildTraceConfig(opts.durationSec, events, opts.heapProfile);
     const configB64 = Buffer.from(config).toString('base64');
     (0, ssh_1.sshExec)(c, `"echo ${configB64} | base64 -d > ${REMOTE_TRACE_CFG}"`);
     // Step 4: Run trace capture with config file

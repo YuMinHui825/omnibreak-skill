@@ -50,9 +50,9 @@ function detectGpuEvents(c: SshConfig, sudo: boolean, sudoPwd?: string): string[
 }
 
 /** Build a Perfetto text config that includes ftrace + process snapshot */
-function buildTraceConfig(durationSec: number, events: string): string {
+function buildTraceConfig(durationSec: number, events: string, heapProfile?: string): string {
   const eventList = events.split(' ').filter(e => e).map(e => `      ftrace_events: "${e}"`).join('\n');
-  return [
+  const parts = [
     'buffers { size_kb: 4096 }',
     'data_sources {',
     '  config {',
@@ -81,13 +81,30 @@ function buildTraceConfig(durationSec: number, events: string): string {
     '    }',
     '  }',
     '}',
+  ];
+  if (heapProfile) {
+    parts.push(
+      'data_sources {',
+      '  config {',
+      '    name: "android.heapprofd"',
+      '    heapprofd_config {',
+      `      process_cmdline: "${heapProfile}"`,
+      '      sampling_interval_bytes: 4096',
+      '      block_client: true',
+      '    }',
+      '  }',
+      '}',
+    );
+  }
+  parts.push(
     'data_sources {',
     '  config {',
     '    name: "linux.system_info"',
     '  }',
     '}',
     `duration_ms: ${durationSec * 1000}`,
-  ].join('\n');
+  );
+  return parts.join('\n');
 }
 
 const SUMMARY_SQL: Record<string, string> = {
@@ -223,6 +240,7 @@ export interface TraceCaptureOptions {
   sudo?: boolean;
   sudoPwd?: string;
   startCmd?: string;
+  heapProfile?: string;
 }
 
 /** Capture a Perfetto trace from the remote target. Deploys tracebox if needed. */
@@ -252,7 +270,7 @@ export function traceCapture(c: SshConfig, opts: TraceCaptureOptions): TraceCapt
     events += ' ' + gpuEvents.join(' ');
     log('info', `Including GPU events: ${gpuEvents.join(' ')}`);
   }
-  const config = buildTraceConfig(opts.durationSec, events);
+  const config = buildTraceConfig(opts.durationSec, events, opts.heapProfile);
   const configB64 = Buffer.from(config).toString('base64');
   sshExec(c, `"echo ${configB64} | base64 -d > ${REMOTE_TRACE_CFG}"`);
 
