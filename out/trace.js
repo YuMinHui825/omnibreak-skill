@@ -36,6 +36,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.traceCapture = traceCapture;
 const child_process_1 = require("child_process");
 const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
+const os = __importStar(require("os"));
 const ssh_1 = require("./ssh");
 const types_1 = require("./types");
 const REMOTE_TRACEBOX = '/tmp/omnibreak-tracebox';
@@ -96,6 +98,15 @@ function buildTraceConfig(durationSec, events) {
         '}',
         'data_sources {',
         '  config {',
+        '    name: "linux.perf"',
+        '    perf_event_config {',
+        '      all_cpus: true',
+        '      sampling_frequency: 100',
+        '    }',
+        '  }',
+        '}',
+        'data_sources {',
+        '  config {',
         '    name: "linux.process_stats"',
         '    process_stats_config {',
         '      scan_all_processes_on_start: true',
@@ -111,6 +122,79 @@ function buildTraceConfig(durationSec, events) {
         `duration_ms: ${durationSec * 1000}`,
     ].join('\n');
 }
+const SUMMARY_SQL = {
+    top_cpu_threads: "SELECT name, SUM(dur)/1e6 AS cpu_ms FROM sched " +
+        "JOIN thread USING (utid) " +
+        "GROUP BY utid ORDER BY cpu_ms DESC LIMIT 10",
+    thread_states: "SELECT name, end_state, SUM(dur)/1e6 AS dur_ms, COUNT(*) AS switches " +
+        "FROM sched JOIN thread USING (utid) " +
+        "GROUP BY utid, end_state ORDER BY dur_ms DESC LIMIT 20",
+    io_wait: "SELECT name, SUM(dur)/1e6 AS io_wait_ms FROM sched " +
+        "JOIN thread USING (utid) WHERE end_state='D' " +
+        "GROUP BY utid ORDER BY io_wait_ms DESC LIMIT 10",
+    scheduling_latency: "SELECT AVG(dur)/1e6 AS avg_slice_ms, MAX(dur)/1e6 AS max_slice_ms, " +
+        "COUNT(*) AS total_switches FROM sched",
+    process_rss: "SELECT name, MAX(CAST(value AS INT))/1024 AS peak_rss_mb " +
+        "FROM counter JOIN process_counter_track ON counter.track_id = process_counter_track.id " +
+        "JOIN process USING (upid) " +
+        "WHERE process_counter_track.name='rss' GROUP BY upid ORDER BY peak_rss_mb DESC LIMIT 10",
+    perf_top_functions: "SELECT name, COUNT(*) AS samples " +
+        "FROM perf_sample JOIN stack_profile_callsite USING (callsite_id) " +
+        "JOIN stack_profile_frame ON stack_profile_callsite.frame_id = stack_profile_frame.id " +
+        "JOIN symbol_table ON stack_profile_frame.symbol_set_id = symbol_table.symbol_set_id " +
+        "WHERE name IS NOT NULL GROUP BY name ORDER BY samples DESC LIMIT 10",
+};
+function ensureTraceProcessor() {
+    const paths = [
+        path.join(os.homedir(), '.cache', 'omnibreak', 'trace_processor'),
+        '/tmp/trace_processor',
+    ];
+    for (const p of paths) {
+        if (fs.existsSync(p))
+            return p;
+    }
+    const dest = path.join(os.homedir(), '.cache', 'omnibreak', 'trace_processor');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    (0, types_1.log)('info', 'Downloading trace_processor...');
+    (0, child_process_1.execSync)(`curl -fsSL -o "${dest}" https://get.perfetto.dev/trace_processor && chmod +x "${dest}"`, { timeout: 120000 });
+    return dest;
+}
+function runTraceSummary(traceFile) {
+    const summary = {};
+    try {
+        const tp = ensureTraceProcessor();
+        for (const [key, sql] of Object.entries(SUMMARY_SQL)) {
+            try {
+                const b64 = Buffer.from(sql).toString('base64');
+                const out = (0, child_process_1.execSync)(`echo ${b64} | base64 -d | ${tp} "${traceFile}" 2>/dev/null`, {
+                    encoding: 'utf8', timeout: 30000, maxBuffer: 10 * 1024 * 1024, shell: '/bin/bash',
+                });
+                const lines = out.trim().split('\n');
+                let started = false;
+                const rows = [];
+                for (const line of lines) {
+                    if (line.startsWith('Query executed') || line.startsWith('Error'))
+                        continue;
+                    if (!started && line.includes('---')) {
+                        started = true;
+                        continue;
+                    }
+                    if (started && line.trim())
+                        rows.push(line.trim());
+                }
+                if (rows.length > 0)
+                    summary[key] = rows;
+            }
+            catch {
+                summary[key] = null;
+            }
+        }
+    }
+    catch (e) {
+        (0, types_1.log)('info', `Trace summary skipped: ${e.message}`);
+    }
+    return summary;
+}
 /** sshExec but with configurable timeout for long operations (trace capture, downloads) */
 function sshExecLong(c, cmd, timeoutMs) {
     if (c.password) {
@@ -122,7 +206,7 @@ function sshExecLong(c, cmd, timeoutMs) {
             return false;
         } })();
         if (hasSshpass) {
-            return (0, child_process_1.execSync)(`sshpass -p '${escSh(c.password)}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${c.port} ${escSh(c.user)}@${escSh(c.host)} ${cmd}`, { timeout: timeoutMs, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 });
+            return (0, child_process_1.execSync)(`SSHPASS='${escSh(c.password)}' sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${c.port} ${escSh(c.user)}@${escSh(c.host)} ${cmd}`, { timeout: timeoutMs, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 });
         }
     }
     return (0, ssh_1.sshExec)(c, cmd);
@@ -137,7 +221,7 @@ function scpPull(c, remote, local) {
         return false;
     } })();
     if (hasSshpass && c.password) {
-        (0, child_process_1.execSync)(`sshpass -p '${escSh(c.password)}' scp -o StrictHostKeyChecking=no -P ${c.port} "${escSh(c.user)}@${escSh(c.host)}:${remote}" "${local}"`, { timeout: 60000, encoding: 'utf8' });
+        (0, child_process_1.execSync)(`SSHPASS='${escSh(c.password)}' sshpass -e scp -o StrictHostKeyChecking=no -P ${c.port} "${escSh(c.user)}@${escSh(c.host)}:${remote}" "${local}"`, { timeout: 60000, encoding: 'utf8' });
         return;
     }
     if (!c.password) {
@@ -253,10 +337,13 @@ function traceCapture(c, opts) {
     catch { }
     const sizeBytes = fs.statSync(opts.outputPath).size;
     (0, types_1.log)('info', `Trace saved: ${opts.outputPath} (${(sizeBytes / 1024).toFixed(1)} KB)`);
+    // Step 7: Run automated trace summary
+    const summary = runTraceSummary(opts.outputPath);
     return {
         output: opts.outputPath,
         sizeBytes,
         remoteHost: c.host,
         durationSec: opts.durationSec,
+        summary,
     };
 }

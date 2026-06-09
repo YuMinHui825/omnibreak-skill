@@ -1,5 +1,7 @@
 import { execSync } from 'child_process';
 import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { SshConfig, sshExec, scpDeploy } from './ssh';
 import { log, TraceCaptureResult } from './types';
 
@@ -63,6 +65,15 @@ function buildTraceConfig(durationSec: number, events: string): string {
     '}',
     'data_sources {',
     '  config {',
+    '    name: "linux.perf"',
+    '    perf_event_config {',
+    '      all_cpus: true',
+    '      sampling_frequency: 100',
+    '    }',
+    '  }',
+    '}',
+    'data_sources {',
+    '  config {',
     '    name: "linux.process_stats"',
     '    process_stats_config {',
     '      scan_all_processes_on_start: true',
@@ -79,13 +90,83 @@ function buildTraceConfig(durationSec: number, events: string): string {
   ].join('\n');
 }
 
+const SUMMARY_SQL: Record<string, string> = {
+  top_cpu_threads:
+    "SELECT name, SUM(dur)/1e6 AS cpu_ms FROM sched " +
+    "JOIN thread USING (utid) " +
+    "GROUP BY utid ORDER BY cpu_ms DESC LIMIT 10",
+  thread_states:
+    "SELECT name, end_state, SUM(dur)/1e6 AS dur_ms, COUNT(*) AS switches " +
+    "FROM sched JOIN thread USING (utid) " +
+    "GROUP BY utid, end_state ORDER BY dur_ms DESC LIMIT 20",
+  io_wait:
+    "SELECT name, SUM(dur)/1e6 AS io_wait_ms FROM sched " +
+    "JOIN thread USING (utid) WHERE end_state='D' " +
+    "GROUP BY utid ORDER BY io_wait_ms DESC LIMIT 10",
+  scheduling_latency:
+    "SELECT AVG(dur)/1e6 AS avg_slice_ms, MAX(dur)/1e6 AS max_slice_ms, " +
+    "COUNT(*) AS total_switches FROM sched",
+  process_rss:
+    "SELECT name, MAX(CAST(value AS INT))/1024 AS peak_rss_mb " +
+    "FROM counter JOIN process_counter_track ON counter.track_id = process_counter_track.id " +
+    "JOIN process USING (upid) " +
+    "WHERE process_counter_track.name='rss' GROUP BY upid ORDER BY peak_rss_mb DESC LIMIT 10",
+  perf_top_functions:
+    "SELECT name, COUNT(*) AS samples " +
+    "FROM perf_sample JOIN stack_profile_callsite USING (callsite_id) " +
+    "JOIN stack_profile_frame ON stack_profile_callsite.frame_id = stack_profile_frame.id " +
+    "JOIN symbol_table ON stack_profile_frame.symbol_set_id = symbol_table.symbol_set_id " +
+    "WHERE name IS NOT NULL GROUP BY name ORDER BY samples DESC LIMIT 10",
+};
+
+function ensureTraceProcessor(): string {
+  const paths = [
+    path.join(os.homedir(), '.cache', 'omnibreak', 'trace_processor'),
+    '/tmp/trace_processor',
+  ];
+  for (const p of paths) { if (fs.existsSync(p)) return p; }
+
+  const dest = path.join(os.homedir(), '.cache', 'omnibreak', 'trace_processor');
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  log('info', 'Downloading trace_processor...');
+  execSync(`curl -fsSL -o "${dest}" https://get.perfetto.dev/trace_processor && chmod +x "${dest}"`, { timeout: 120000 });
+  return dest;
+}
+
+function runTraceSummary(traceFile: string): Record<string, any> {
+  const summary: Record<string, any> = {};
+  try {
+    const tp = ensureTraceProcessor();
+    for (const [key, sql] of Object.entries(SUMMARY_SQL)) {
+      try {
+        const b64 = Buffer.from(sql).toString('base64');
+        const out = execSync(`echo ${b64} | base64 -d | ${tp} "${traceFile}" 2>/dev/null`, {
+          encoding: 'utf8', timeout: 30000, maxBuffer: 10 * 1024 * 1024, shell: '/bin/bash',
+        });
+        const lines = out.trim().split('\n');
+        let started = false;
+        const rows: string[] = [];
+        for (const line of lines) {
+          if (line.startsWith('Query executed') || line.startsWith('Error')) continue;
+          if (!started && line.includes('---')) { started = true; continue; }
+          if (started && line.trim()) rows.push(line.trim());
+        }
+        if (rows.length > 0) summary[key] = rows;
+      } catch { summary[key] = null; }
+    }
+  } catch (e: any) {
+    log('info', `Trace summary skipped: ${e.message}`);
+  }
+  return summary;
+}
+
 /** sshExec but with configurable timeout for long operations (trace capture, downloads) */
 function sshExecLong(c: SshConfig, cmd: string, timeoutMs: number): string {
   if (c.password) {
     const hasSshpass = (() => { try { execSync('which sshpass 2>/dev/null', { stdio: 'pipe' }); return true; } catch { return false; } })();
     if (hasSshpass) {
       return execSync(
-        `sshpass -p '${escSh(c.password)}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${c.port} ${escSh(c.user)}@${escSh(c.host)} ${cmd}`,
+        `SSHPASS='${escSh(c.password)}' sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${c.port} ${escSh(c.user)}@${escSh(c.host)} ${cmd}`,
         { timeout: timeoutMs, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 },
       );
     }
@@ -98,7 +179,7 @@ function scpPull(c: SshConfig, remote: string, local: string): void {
   const hasSshpass = (() => { try { execSync('which sshpass 2>/dev/null', { stdio: 'pipe' }); return true; } catch { return false; } })();
   if (hasSshpass && c.password) {
     execSync(
-      `sshpass -p '${escSh(c.password)}' scp -o StrictHostKeyChecking=no -P ${c.port} "${escSh(c.user)}@${escSh(c.host)}:${remote}" "${local}"`,
+      `SSHPASS='${escSh(c.password)}' sshpass -e scp -o StrictHostKeyChecking=no -P ${c.port} "${escSh(c.user)}@${escSh(c.host)}:${remote}" "${local}"`,
       { timeout: 60000, encoding: 'utf8' },
     );
     return;
@@ -225,10 +306,14 @@ export function traceCapture(c: SshConfig, opts: TraceCaptureOptions): TraceCapt
   const sizeBytes = fs.statSync(opts.outputPath).size;
   log('info', `Trace saved: ${opts.outputPath} (${(sizeBytes / 1024).toFixed(1)} KB)`);
 
+  // Step 7: Run automated trace summary
+  const summary = runTraceSummary(opts.outputPath);
+
   return {
     output: opts.outputPath,
     sizeBytes,
     remoteHost: c.host,
     durationSec: opts.durationSec,
+    summary,
   };
 }

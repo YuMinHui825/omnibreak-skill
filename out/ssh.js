@@ -17,7 +17,7 @@ function hasSshpass() {
 /** Run command on remote target. Uses sshpass if available, falls back to ssh2 library. */
 function sshExec(c, cmd) {
     if (hasSshpass() && c.password) {
-        return (0, child_process_1.execSync)(`sshpass -p '${esc(c.password)}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPersist=60s -p ${c.port} ${esc(c.user)}@${esc(c.host)} ${cmd}`, { timeout: 15000, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+        return (0, child_process_1.execSync)(`SSHPASS='${esc(c.password)}' sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPersist=60s -p ${c.port} ${esc(c.user)}@${esc(c.host)} ${cmd}`, { timeout: 15000, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
     }
     if (c.password)
         return ssh2Exec(c, cmd);
@@ -56,7 +56,7 @@ function ssh2Exec(c, cmd) {
 /** SCP file to remote target */
 function scpDeploy(source, c, dest) {
     if (hasSshpass() && c.password) {
-        (0, child_process_1.execSync)(`sshpass -p '${esc(c.password)}' scp -o StrictHostKeyChecking=no -P ${c.port} ${esc(source)} ${esc(c.user)}@${esc(c.host)}:${esc(dest)}`, { timeout: 60000, encoding: 'utf8' });
+        (0, child_process_1.execSync)(`SSHPASS='${esc(c.password)}' sshpass -e scp -o StrictHostKeyChecking=no -P ${c.port} ${esc(source)} ${esc(c.user)}@${esc(c.host)}:${esc(dest)}`, { timeout: 60000, encoding: 'utf8' });
         return;
     }
     if (c.password) {

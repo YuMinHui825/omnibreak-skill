@@ -64,6 +64,7 @@ export interface TraceCaptureResult {
   sizeBytes: number;
   remoteHost: string;
   durationSec: number;
+  summary?: Record<string, any>;
 }
 
 /** Leak report */
