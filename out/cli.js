@@ -4,6 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const commander_1 = require("commander");
 const http_1 = require("http");
 const PORT = 49200;
+function jsonLog(obj) { console.log(JSON.stringify(obj)); }
 function daemonCall(cmd, data) {
     return new Promise((resolve, reject) => {
         const body = data ? JSON.stringify(data) : '';
@@ -45,7 +46,7 @@ prog.command('launch').description('Start a debug session')
     .option('--deploy-source <path>', 'Local binary to SCP')
     .option('--sudo', 'Use sudo for gdbserver commands')
     .option('--skip-gdbserver', 'Skip starting gdbserver (already running)')
-    .action(o => daemonCall('launch', { ...o, line: undefined }).then(console.log));
+    .action(o => daemonCall('launch', { ...o, line: undefined }).then(jsonLog));
 prog.command('attach').description('Attach to running process')
     .requiredOption('--target <host>', 'Target Linux IP')
     .option('--user <name>', 'SSH user', 'root')
@@ -58,37 +59,37 @@ prog.command('attach').description('Attach to running process')
     .option('--source-map <json>', 'Source path mapping')
     .option('--deploy-source <path>', 'Local binary to SCP before attach')
     .option('--sudo', 'Use sudo for gdbserver commands')
-    .action(o => daemonCall('attach', { ...o, processName: o.process }).then(console.log));
+    .action(o => daemonCall('attach', { ...o, processName: o.process }).then(jsonLog));
 prog.command('break').description('Set breakpoint')
     .requiredOption('--file <path>', 'Source file')
     .requiredOption('--line <n>', 'Line number')
     .option('--condition <expr>', 'Condition')
-    .action(o => daemonCall('break', o).then(console.log));
-prog.command('continue').alias('c').description('Continue execution').action(() => daemonCall('continue').then(console.log));
-prog.command('next').alias('n').description('Step over').action(() => daemonCall('next').then(console.log));
-prog.command('step').alias('s').description('Step into').action(() => daemonCall('step').then(console.log));
-prog.command('status').description('Get debug state').action(() => daemonCall('status').then(console.log));
-prog.command('crash').description('Crash backtrace').action(() => daemonCall('crash').then(console.log));
-prog.command('eval').description('Evaluate expression').argument('<expr>').action(e => daemonCall('eval', { expr: e }).then(console.log));
-prog.command('gdb').description('Raw GDB/MI command (e.g. gdb -break-delete 1)').allowUnknownOption().argument('<cmd...>').action((_cmd, _opts, cmdObj) => { const all = cmdObj.args.join(' '); daemonCall('gdb', { cmd: all }).then(console.log); });
+    .action(o => daemonCall('break', o).then(jsonLog));
+prog.command('continue').alias('c').description('Continue execution').action(() => daemonCall('continue').then(jsonLog));
+prog.command('next').alias('n').description('Step over').action(() => daemonCall('next').then(jsonLog));
+prog.command('step').alias('s').description('Step into').action(() => daemonCall('step').then(jsonLog));
+prog.command('status').description('Get debug state').action(() => daemonCall('status').then(jsonLog));
+prog.command('crash').description('Crash backtrace').action(() => daemonCall('crash').then(jsonLog));
+prog.command('eval').description('Evaluate expression').argument('<expr>').action(e => daemonCall('eval', { expr: e }).then(jsonLog));
+prog.command('gdb').description('Raw GDB/MI command (e.g. gdb -break-delete 1)').allowUnknownOption().argument('<cmd...>').action((_cmd, _opts, cmdObj) => { const all = cmdObj.args.join(' '); daemonCall('gdb', { cmd: all }).then(jsonLog); });
 prog.command('watch').description('Set watchpoint on variable/expression')
     .requiredOption('--expr <expression>', 'Variable or expression to watch')
     .option('--type <mode>', 'read, write (default), or access', 'write')
-    .action(o => daemonCall('watch', o).then(console.log));
-prog.command('stop').description('End session').action(() => daemonCall('stop').then(console.log));
-prog.command('health').description('Check daemon').action(() => daemonCall('health').then(console.log));
+    .action(o => daemonCall('watch', o).then(jsonLog));
+prog.command('stop').description('End session').action(() => daemonCall('stop').then(jsonLog));
+prog.command('health').description('Check daemon').action(() => daemonCall('health').then(jsonLog));
 prog.command('stats').description('Process stats (CPU/RSS/VSZ/threads/state)')
     .requiredOption('--pid <n>', 'Process ID')
     .requiredOption('--target <host>', 'Target Linux IP')
     .option('--user <name>', 'SSH user', 'root')
     .option('--pwd <pass>', 'SSH password')
-    .action(o => daemonCall('stats', o).then(console.log));
+    .action(o => daemonCall('stats', o).then(jsonLog));
 prog.command('leaks').description('Memory leak detection')
     .requiredOption('--pid <n>', 'Process ID')
     .requiredOption('--target <host>', 'Target Linux IP')
     .option('--user <name>', 'SSH user', 'root')
     .option('--pwd <pass>', 'SSH password')
-    .action(o => daemonCall('leaks', o).then(console.log));
+    .action(o => daemonCall('leaks', o).then(jsonLog));
 prog.command('trace').description('Capture Perfetto trace from remote target')
     .requiredOption('--target <host>', 'Target Linux IP')
     .option('--user <name>', 'SSH user', 'root')
@@ -100,7 +101,7 @@ prog.command('trace').description('Capture Perfetto trace from remote target')
     .option('--sudo-pwd <pass>', 'Sudo password (defaults to SSH password)')
     .option('--start-cmd <cmd>', 'Command to run on remote after trace starts')
     .option('--heap-profile <process>', 'Enable heapprofd for process name (native heap profiling)')
-    .action(o => daemonCall('trace-capture', o).then(console.log));
+    .action(o => daemonCall('trace-capture', o).then(jsonLog));
 // Standalone deploy (works cross-platform: sshpass/scp on Unix, ssh2 SFTP fallback on Windows)
 prog.command('logs').description('Read remote log file')
     .requiredOption('--target <host>', 'Target Linux IP')
@@ -108,7 +109,7 @@ prog.command('logs').description('Read remote log file')
     .option('--lines <n>', 'Number of lines to read', '100')
     .option('--user <name>', 'SSH user', 'root')
     .option('--pwd <pass>', 'SSH password')
-    .action(o => daemonCall('logs', o).then(console.log));
+    .action(o => daemonCall('logs', o).then(jsonLog));
 prog.command('deploy').description('SCP file to target')
     .requiredOption('--source <path>', 'Local file')
     .requiredOption('--target <host>', 'Target IP')

@@ -1,6 +1,6 @@
 {
   "name": "omnibreak-skill",
-  "version": "0.1.0",
+  "version": "0.4.0-beta",
   "description": "OmniBreak CLI — remote Linux debugger for automated workflows and Claude Code",
   "bin": {
     "omnibreak": "./out/cli.js"
@@ -8,7 +8,12 @@
   "scripts": {
     "compile": "tsc",
     "watch": "tsc --watch",
-    "start": "node out/cli.js"
+    "start": "node out/cli.js",
+    "pretest:integration": "pkill -f 'node.*daemon' 2>/dev/null; sleep 0.5; nohup node out/daemon.js > /dev/null 2>&1 & sleep 2",
+    "test:integration": "jest --forceExit --detectOpenHandles test/integration",
+    "posttest:integration": "pkill -f 'node.*daemon' 2>/dev/null || true",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "jest --forceExit test/unit"
   },
   "keywords": [
     "debug",
@@ -30,8 +35,11 @@
     "ssh2": "^1.17.0"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.0.0",
     "@types/ssh2": "^1.15.5",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.11",
     "typescript": "^5.4.0"
   }
 }
