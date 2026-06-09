@@ -20,10 +20,10 @@ Works with the same GDB/MI engine as [OmniBreak VSCode Extension](https://github
 ## Architecture
 
 ```
-omnibreak daemon &          # Background daemon holds GDB connection
-omnibreak launch ...        # All commands talk to daemon via Unix socket
+omnibreak daemon &          # Background daemon holds GDB connection (TCP 127.0.0.1:49200)
+omnibreak launch ...        # All commands talk to daemon via TCP
 omnibreak break ...
-omnibreak continue ...
+omnibreak continue ...      # Returns full status: threads, frames, variables
 omnibreak status ...        # Returns JSON: threads, frames, variables
 omnibreak stop
 ```
@@ -65,12 +65,14 @@ After installation, Claude can **autonomously** complete the full debug cycle �
 
 1. **Asks for missing info** — target IP, SSH password, binary path, source location, build command
 2. **Compiles + deploys** — builds with `-g` debug symbols, SCPs to target
-3. **Breakpoints + execution** — sets breakpoints, runs, steps, inspects variables
-4. **Auto crash analysis** — captures full 500-frame backtrace with exact file:line
-5. **Memory leak detection** — continuous heap sampling with risk escalation (none→low→medium→high)
-6. **Performance monitoring** — real-time CPU%, RSS, VSZ, thread count
-7. **Fixes code** — analyzes root cause, edits source, rebuilds, redeploys, re-verifies
-8. **Generates diagnostic reports** — summarizes problem, fix, and verification results
+3. **Breakpoints + watchpoints** — sets breakpoints (file:line, conditional) and watchpoints (read/write/access)
+4. **Auto state on continue** — continue/next/step automatically return threads, frames, and variables
+5. **Auto crash analysis** — captures full 500-frame backtrace with exact file:line
+6. **Memory leak detection** — heap tracking with risk escalation, plus Perfetto heapprofd native profiling
+7. **Performance monitoring** — real-time CPU%, RSS, VSZ, thread count, remote log tailing
+8. **System trace capture** — Perfetto with CPU sampling (flame graphs), GPU auto-detection, SQL auto-summary
+9. **Fixes code** — analyzes root cause, edits source, rebuilds, redeploys, re-verifies
+10. **Generates diagnostic reports** — summarizes problem, fix, and verification results
 
 ## Quick Start
 
@@ -102,17 +104,18 @@ omnibreak stop
 | `launch` | Deploy + start binary on target via gdbserver |
 | `attach` | Attach to a running process |
 | `break` | Set breakpoint (`--file`, `--line`, `--condition`) |
-| `continue` / `c` | Resume execution |
-| `next` / `n` | Step over |
-| `step` / `s` | Step into |
-| `finish` / `f` | Step out |
+| `continue` / `c` | Resume execution (auto-returns status with threads/frames/vars) |
+| `next` / `n` | Step over (auto-returns status) |
+| `step` / `s` | Step into (auto-returns status) |
 | `status` | Full debug state (threads, frames, vars) |
 | `crash` | Crash backtrace (500 frames) |
 | `eval` | Evaluate C expression |
 | `gdb` | Raw GDB/MI command |
+| `watch` | Set watchpoint (`--expr`, `--type read/write/access`) |
 | `stats` | Process stats — CPU%, RSS, VSZ, thread count, state |
 | `leaks` | Memory leak detection — heap tracking, risk escalation |
-| `trace` | Capture Perfetto trace from remote target (system-wide) |
+| `logs` | Read remote log file (`--path`, `--lines`) |
+| `trace` | Capture Perfetto trace from remote target (system-wide + CPU sampling + auto-summary) |
 | `deploy` | SCP file to target (standalone, no session needed) |
 | `stop` | End session & cleanup |
 | `health` | Check if daemon is running |
@@ -154,12 +157,25 @@ omnibreak trace --target <IP>
   --sudo                  Use sudo for ftrace access (required for kernel events)
   --sudo-pwd <pass>       Sudo password (defaults to SSH password)
   --start-cmd <cmd>       Command to run on remote AFTER trace starts
+  --heap-profile <proc>   Enable heapprofd native heap profiling for process name
 ```
 
 Uses [Perfetto tracebox](https://perfetto.dev) — deploys automatically on first use (~20MB one-time download).  
-Output is a `.pftrace` file that can be opened in [ui.perfetto.dev](https://ui.perfetto.dev).
+Returns a `.pftrace` file openable in [ui.perfetto.dev](https://ui.perfetto.dev), plus an auto-generated JSON summary:
 
-**GPU auto-detection:** On first capture, OmniBreak probes `/sys/kernel/tracing/events/` for GPU ftrace sources (i915, mali, kgsl, amdgpu, virtio_gpu, drm, etc.) and auto-includes them. Multi-GPU systems (integrated + discrete) are fully supported.
+```
+summary:
+  top_cpu_threads     ← top-10 CPU consumers with ms
+  thread_states       ← per-thread end_state breakdown
+  io_wait             ← threads stuck in D state
+  scheduling_latency  ← avg/max scheduling slice duration
+  process_rss         ← per-process peak RSS
+  perf_top_functions  ← flame graph: top functions by CPU samples
+```
+
+**GPU auto-detection:** probes `/sys/kernel/tracing/events/` for GPU ftrace sources.  
+**CPU sampling:** 100Hz `linux.perf` data source for flame graphs.  
+**Security:** passwords passed via `SSHPASS` env variable, never in `ps` output.
 
 ## JSON Output
 
@@ -256,7 +272,42 @@ omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
   --events "sched/sched_switch i915/i915_gem_request_submit"
 ```
 
-The trace captures CPU scheduling + GPU events (auto-detected) of ALL processes, plus process snapshots and system info. Use the `--start-cmd` flag to ensure short-lived programs are captured (trace starts first, then the command runs).
+The trace captures CPU scheduling + GPU events (auto-detected) + CPU callstack sampling of ALL processes, plus process snapshots and system info. Use the `--start-cmd` flag to ensure short-lived programs are captured.
+
+### Watchpoint debugging
+
+```bash
+# Watch when variable 'x' is written to
+omnibreak watch --expr "x" --type write
+
+# Watch when expression is accessed (read or write)
+omnibreak watch --expr "ptr->data" --type access
+
+# Continue — stops when x changes, returns new value in vars
+omnibreak continue
+# → {"ok":true,"status":"stopped","file":"main.c","line":42,"vars":[{"name":"x","value":"100"}]}
+```
+
+### Remote log inspection
+
+```bash
+# Read last 100 lines of a remote log file
+omnibreak logs --target 192.168.1.100 --path /var/log/myapp.log --lines 100 --user root
+
+# Tail recent activity
+omnibreak logs --target 192.168.1.100 --path /tmp/gdbserver-output.log --lines 50
+# → {"path":"/var/log/myapp.log","lines":["2024-01-01 INFO ...","..."]}
+```
+
+### Native heap profiling (heapprofd)
+
+```bash
+# Capture trace with native heap profiling for myapp
+omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
+  --heap-profile "myapp"
+
+# Open trace in ui.perfetto.dev → Heap Dump Explorer → see per-function allocation flame graph
+```
 
 ## Troubleshooting
 

@@ -74,9 +74,11 @@ omnibreak attach  --target <IP> --process <NAME>|--pid <N>
                   [--pwd <pass>] [--sudo]
 
 omnibreak break   --file <PATH> --line <N> [--condition "x>100"]
-omnibreak continue | c        Resume execution
-omnibreak next    | n         Step over
-omnibreak step    | s         Step into
+omnibreak watch   --expr <VAR> [--type write|read|access]
+    Set data watchpoint. Type defaults to write.
+omnibreak continue | c        Resume — auto-returns status with threads/frames/vars
+omnibreak next    | n         Step over — auto-returns status
+omnibreak step    | s         Step into — auto-returns status
 ```
 
 ### Inspection
@@ -85,6 +87,8 @@ omnibreak status              Returns: {file, line, threads, frames, vars}
 omnibreak crash               Full 500-frame crash backtrace (after SIGSEGV/SIGABRT)
 omnibreak eval    <expr>      Evaluate C expression (e.g., "ptr->data", "buf[0]")
 omnibreak gdb     <MI cmd>    Raw GDB/MI command for advanced inspection
+omnibreak logs    --target <IP> --path <LOG> [--lines 100]
+    Read last N lines of a remote log file.
 ```
 
 ### Runtime Monitoring
@@ -106,10 +110,17 @@ omnibreak leaks   --pid <N> --target <IP> [--user root] [--pwd <pass>]
 omnibreak trace   --target <IP> [--user root] [--pwd <pass>]
                   [--duration 10] [--output ./trace.pftrace]
                   [--events <list>] [--sudo] [--sudo-pwd <pass>]
-                  [--start-cmd <cmd>]
-    Returns: {output, sizeBytes, remoteHost, durationSec}
-    Captures system-wide Perfetto trace: CPU scheduling, GPU events (auto-detected),
-    process snapshots, system info. Output .pftrace viewable at ui.perfetto.dev.
+                  [--start-cmd <cmd>] [--heap-profile <proc>]
+    Returns: {output, sizeBytes, remoteHost, durationSec, summary}
+    Captures system-wide Perfetto trace: CPU scheduling + CPU callstack sampling
+    (100Hz flame graphs) + GPU events (auto-detected) + process snapshots + system info.
+    Output .pftrace + auto-generated JSON summary:
+      - top_cpu_threads: top-10 CPU consumers
+      - thread_states: per-thread end_state breakdown (R/S/D/Z)
+      - io_wait: threads in Uninterruptible Sleep
+      - scheduling_latency: avg/max slice duration
+      - perf_top_functions: flame graph hot functions (if kernel supports perf_event)
+    Use --heap-profile <proc> to enable native heap profiling with callstacks.
     Use --start-cmd to capture short-lived programs (trace starts first).
 ```
 
@@ -195,12 +206,20 @@ Error codes: `CONNECTION`, `AUTH`, `TIMEOUT`, `BINARY`, `SESSION`, `PTRACE`
 
 ```
 1. Capture system-wide trace: omnibreak trace --target <IP> --sudo --duration 10
-   → Returns {output: "./trace.pftrace", sizeBytes: 35000, ...}
+   → Returns {output: "./trace.pftrace", sizeBytes: 35000, summary: {...}, ...}
+   → summary.top_cpu_threads gives immediate top CPU consumers
    → GPU events are auto-detected from /sys/kernel/tracing/events/
 2. For short-lived programs, use --start-cmd so trace starts first:
    omnibreak trace --target <IP> --sudo --duration 10 --start-cmd "/app/myapp"
-3. Open the .pftrace file in https://ui.perfetto.dev to view the timeline
-4. Use trace_processor_shell for SQL analysis if needed
+3. For native heap profiling, add --heap-profile:
+   omnibreak trace --target <IP> --sudo --duration 10 --heap-profile "myapp"
+   → Opens heap flame graph in ui.perfetto.dev showing per-function allocations
+4. The auto-summary JSON eliminates the need to open the UI for quick diagnosis:
+   - top_cpu_threads: which threads consume CPU
+   - thread_states: R/S/D/Z breakdown per thread
+   - io_wait: threads stuck in D state (disk/network blocking)
+   - scheduling_latency: if max > 100ms, system is overloaded
+   - perf_top_functions: CPU flame graph – which functions burn CPU cycles
 5. Use this to:
    - Find CPU scheduling bottlenecks (which threads hog CPU)
    - Correlate GPU command submission with CPU work

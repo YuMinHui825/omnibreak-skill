@@ -20,10 +20,10 @@ OmniBreak Skill 是一个 CLI 工具，封装 GDB/gdbserver，输出结构化 JS
 ## 架构
 
 ```
-omnibreak daemon &          # 后台 daemon 保持 GDB 连接
-omnibreak launch ...        # 所有命令通过 Unix socket 与 daemon 通信
+omnibreak daemon &          # 后台 daemon 保持 GDB 连接（TCP 127.0.0.1:49200）
+omnibreak launch ...        # 所有命令通过 TCP 与 daemon 通信
 omnibreak break ...
-omnibreak continue ...
+omnibreak continue ...      # 自动返回完整状态：线程、栈帧、变量
 omnibreak status ...        # 返回 JSON：线程、栈帧、变量
 omnibreak stop
 ```
@@ -65,12 +65,14 @@ cp SKILL.md ~/.claude/skills/omnibreak/SKILL.md
 
 1. **主动询问缺失信息** — 目标 IP、SSH 密码、二进制路径、源码位置、构建命令等
 2. **编译 + 部署** — 自动编译带 `-g` 调试符号，SCP 到远程
-3. **断点 + 执行** — 设断点、启动、单步、查看变量
-4. **崩溃自动分析** — 捕获完整调用栈，定位 `file:line`
-5. **内存泄漏检测** — 持续采样堆内存，自动判断风险等级
-6. **性能监控** — CPU%、RSS、VSZ、线程数实时查看
-7. **修复代码** — 分析根因，修改源码，重新编译部署验证
-8. **生成诊断报告** — 汇总问题、修复方案、验证结果
+3. **断点 + 监视点** — 设断点（file:line、条件）和监视点（读/写/访问）
+4. **continue 自动返回状态** — continue/next/step 自动返回线程、栈帧、变量
+5. **崩溃自动分析** — 捕获完整调用栈，定位 `file:line`
+6. **内存泄漏检测** — 堆采样 + 风险等级 + Perfetto heapprofd 原生堆剖析
+7. **性能监控** — CPU%、RSS、VSZ、线程数 + 远程日志查看
+8. **系统 Trace 采集** — Perfetto + CPU 采样火焰图 + GPU 自动检测 + SQL 自动摘要
+9. **修复代码** — 分析根因，修改源码，重新编译部署验证
+10. **生成诊断报告** — 汇总问题、修复方案、验证结果
 
 ## 快速开始
 
@@ -102,17 +104,18 @@ omnibreak stop
 | `launch` | 部署 + 在目标机上启动程序 |
 | `attach` | 附到运行中进程 |
 | `break` | 设断点（`--file`、`--line`、`--condition`） |
-| `continue` / `c` | 继续执行 |
-| `next` / `n` | 单步跳过 |
-| `step` / `s` | 单步进入 |
-| `finish` / `f` | 执行完当前函数 |
+| `continue` / `c` | 继续执行（自动返回状态：线程、栈帧、变量） |
+| `next` / `n` | 单步跳过（自动返回状态） |
+| `step` / `s` | 单步进入（自动返回状态） |
 | `status` | 完整调试状态（线程、栈帧、变量） |
 | `crash` | 崩溃堆栈（500 帧） |
 | `eval` | 求值 C 表达式 |
 | `gdb` | 原始 GDB/MI 命令 |
+| `watch` | 设监视点（`--expr`、`--type read/write/access`） |
 | `stats` | 进程统计 — CPU%、RSS、VSZ、线程数、状态 |
 | `leaks` | 内存泄漏检测 — 堆内存追踪，风险等级评估 |
-| `trace` | 采集 Perfetto 系统级 trace（全系统） |
+| `logs` | 读取远程日志文件（`--path`、`--lines`） |
+| `trace` | 采集 Perfetto 系统级 trace（CPU 采样 + 自动摘要） |
 | `deploy` | SCP 文件到目标机（独立命令，无需 session） |
 | `stop` | 结束会话并清理 |
 | `health` | 检查 daemon 是否在运行 |
@@ -154,12 +157,25 @@ omnibreak trace --target <IP>
   --sudo                  使用 sudo 执行（ftrace 需要 root 权限）
   --sudo-pwd <pass>       Sudo 密码（默认同 SSH 密码）
   --start-cmd <cmd>       Trace 启动后在远程执行的命令
+  --heap-profile <proc>   启用 heapprofd 原生堆剖析，指定进程名
 ```
 
 基于 [Perfetto tracebox](https://perfetto.dev) — 首次自动部署（约 20MB 一次性下载）。  
-输出 `.pftrace` 文件，拖入 [ui.perfetto.dev](https://ui.perfetto.dev) 即可可视化查看。
+返回 `.pftrace` 文件，拖入 [ui.perfetto.dev](https://ui.perfetto.dev) 可视化查看，同时返回自动生成的 JSON 摘要：
 
-**GPU 自动检测：** 首次采集时自动探测远程 `/sys/kernel/tracing/events/` 中的 GPU ftrace 源（i915、mali、kgsl、amdgpu、virtio_gpu、drm 等）并自动加入。核显 + 独显双卡环境完整支持。
+```
+summary:
+  top_cpu_threads     ← CPU 占用 Top-10 线程及毫秒数
+  thread_states       ← 线程状态分布（R/S/D/Z）
+  io_wait             ← D 状态（IO 阻塞）线程
+  scheduling_latency  ← 调度延迟均值/最大值
+  process_rss         ← 进程 RSS 峰值
+  perf_top_functions  ← CPU 采样火焰图：热点函数 Top-10
+```
+
+**GPU 自动检测**：探 `/sys/kernel/tracing/events/` 中的 GPU ftrace 源。  
+**CPU 采样**：100Hz `linux.perf` 数据源生成火焰图。  
+**安全**：密码通过 `SSHPASS` 环境变量传递，不出现在 `ps` 输出中。
 
 ## JSON 输出
 
@@ -256,7 +272,39 @@ omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
   --events "sched/sched_switch i915/i915_gem_request_submit"
 ```
 
-Trace 捕获目标机上**所有进程**的 CPU 调度 + GPU 事件（自动检测）、进程快照和系统信息。对于短时运行的程序，用 `--start-cmd` 让 trace 先启动、再执行命令，确保进程的完整生命周期被捕获。
+Trace 捕获目标机上所有进程的 CPU 调度 + GPU 事件（自动检测）+ CPU 调用栈采样 + 进程快照和系统信息。短时运行程序用 `--start-cmd` 确保生命周期完整捕获。
+
+### 监视点调试
+
+```bash
+# 监视变量写入
+omnibreak watch --expr "x" --type write
+
+# 监视表达式读写
+omnibreak watch --expr "ptr->data" --type access
+
+# 继续执行 — x 变化时自动停下来，返回新值
+omnibreak continue
+# → {"ok":true,"status":"stopped","file":"main.c","line":42,"vars":[{"name":"x","value":"100"}]}
+```
+
+### 远程日志查看
+
+```bash
+# 读取远程日志最后 100 行
+omnibreak logs --target 192.168.1.100 --path /var/log/myapp.log --lines 100 --user root
+# → {"path":"/var/log/myapp.log","lines":["2024-01-01 INFO ...","..."]}
+```
+
+### 原生堆剖析 (heapprofd)
+
+```bash
+# 采集 trace 时对 myapp 做原生堆剖析
+omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
+  --heap-profile "myapp"
+
+# 打开 trace → Heap Dump Explorer → 查看每个函数的分配火焰图
+```
 
 ## Troubleshooting
 
