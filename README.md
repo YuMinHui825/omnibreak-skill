@@ -52,6 +52,23 @@ npm install --production && npm link
 Pre-compiled JavaScript is included — no TypeScript compilation needed.  
 Dev setup (only for contributors who modify TypeScript): `npm install && npm run compile`.
 
+### Running Tests
+
+```bash
+# Unit tests (pure logic, no remote VM needed)
+npm run test:unit
+
+# Integration tests (requires remote target + running daemon)
+nohup node out/daemon.js > /dev/null 2>&1 &
+npm run test:integration      # daemon auto-managed
+
+# All tests
+npm test
+```
+
+Integration tests target `ubuntu@192.168.64.2:1234` by default.  
+Override in `test/setup.ts`.
+
 ### Claude Code Integration
 
 ```bash

@@ -52,6 +52,22 @@ npm install --production && npm link
 已包含预编译的 JavaScript，无需 TypeScript 编译。  
 开发环境（仅修改 TypeScript 的贡献者需要）：`npm install && npm run compile`。
 
+### 运行测试
+
+```bash
+# 单元测试（纯逻辑，不需要远程 VM）
+npm run test:unit
+
+# 集成测试（需要远程目标 + 运行中的 daemon）
+nohup node out/daemon.js > /dev/null 2>&1 &
+npm run test:integration      # daemon 自动管理生命周期
+
+# 全部测试
+npm test
+```
+
+集成测试默认连接 `ubuntu@192.168.64.2:1234`，可在 `test/setup.ts` 中修改。
+
 ### Claude Code 集成
 
 ```bash
