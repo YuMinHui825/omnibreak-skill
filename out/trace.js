@@ -137,11 +137,10 @@ const SUMMARY_SQL = {
         "FROM counter JOIN process_counter_track ON counter.track_id = process_counter_track.id " +
         "JOIN process USING (upid) " +
         "WHERE process_counter_track.name='rss' GROUP BY upid ORDER BY peak_rss_mb DESC LIMIT 10",
-    perf_top_functions: "SELECT name, COUNT(*) AS samples " +
-        "FROM perf_sample JOIN stack_profile_callsite USING (callsite_id) " +
-        "JOIN stack_profile_frame ON stack_profile_callsite.frame_id = stack_profile_frame.id " +
-        "JOIN symbol_table ON stack_profile_frame.symbol_set_id = symbol_table.symbol_set_id " +
-        "WHERE name IS NOT NULL GROUP BY name ORDER BY samples DESC LIMIT 10",
+    perf_stats: "SELECT COUNT(*) AS total_samples, " +
+        "COUNT(DISTINCT callsite_id) AS unique_stacks " +
+        "FROM perf_sample WHERE callsite_id IS NOT NULL",
+    perf_top_frames: "SELECT id, name FROM stack_profile_frame LIMIT 10",
 };
 function ensureTraceProcessor() {
     const paths = [
