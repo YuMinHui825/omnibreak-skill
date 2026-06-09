@@ -35,11 +35,6 @@ npm install --production && npm link
 
 Pre-compiled — no build step needed.
 
-Register in Claude Code:
-```
-/skill add omnibreak https://github.com/YuMinHui825/omnibreak-skill.git
-```
-
 ## Prerequisites (Remote Target)
 
 ```bash

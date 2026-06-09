@@ -55,12 +55,11 @@ Dev setup (only for contributors who modify TypeScript): `npm install && npm run
 ### Claude Code Integration
 
 ```bash
-# Method 1: Add via skill command (recommended)
-/skill add omnibreak https://github.com/YuMinHui825/omnibreak-skill.git
-
-# Method 2: Manual registration
-cp SKILL.md ~/.claude/skills/omnibreak.md
+mkdir -p ~/.claude/skills/omnibreak
+cp SKILL.md ~/.claude/skills/omnibreak/SKILL.md
 ```
+
+Restart Claude Code after first install.
 
 After installation, Claude can **autonomously** complete the full debug cycle — no manual commands needed:
 

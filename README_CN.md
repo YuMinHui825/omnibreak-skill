@@ -55,12 +55,11 @@ npm install --production && npm link
 ### Claude Code 集成
 
 ```bash
-# 方法 1：通过 skill 命令添加（推荐）
-/skill add omnibreak https://github.com/YuMinHui825/omnibreak-skill.git
-
-# 方法 2：手动注册
-cp SKILL.md ~/.claude/skills/omnibreak.md
+mkdir -p ~/.claude/skills/omnibreak
+cp SKILL.md ~/.claude/skills/omnibreak/SKILL.md
 ```
+
+首次安装后需重启 Claude Code。
 
 安装后，Claude 可以自主完成整个调试闭环——不需要你手动操作任何命令：
 
