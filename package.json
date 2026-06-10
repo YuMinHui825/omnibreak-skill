@@ -1,6 +1,6 @@
 {
   "name": "omnibreak-skill",
-  "version": "0.4.0-beta",
+  "version": "0.4.0",
   "description": "OmniBreak CLI — remote Linux debugger for automated workflows and Claude Code",
   "bin": {
     "omnibreak": "./out/cli.js"
