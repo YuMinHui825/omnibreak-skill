@@ -91,6 +91,14 @@ omnibreak logs    --target <IP> --path <LOG> [--lines 100]
     Read last N lines of a remote log file.
 ```
 
+### Post-Mortem (no daemon needed)
+```
+omnibreak coredump --binary <PATH> --core <CORE> [--gdb /usr/bin/gdb-multiarch]
+    Analyze a core dump file locally. Returns: {signal, crashingThread,
+    threads: [{id, name, frames: [{func, file, line}]}], registers, sharedLibs}
+    Pure local operation — GDB runs on your machine, not the remote target.
+```
+
 ### Runtime Monitoring
 ```
 omnibreak stats   --pid <N> --target <IP> [--user root] [--pwd <pass>]
@@ -200,6 +208,17 @@ Error codes: `CONNECTION`, `AUTH`, `TIMEOUT`, `BINARY`, `SESSION`, `PTRACE`
    - state=Z → zombie process (bug: missing wait() call)
 3. Cross-reference with omnibreak status to see which functions are active
 4. Report findings to user with specific file:line recommendations
+```
+
+## Coredump Analysis
+
+```
+1. User provides a core dump file and the matching binary (with -g debug symbols)
+2. Run: omnibreak coredump --binary ./myapp --core ./core.1234
+   → Returns {signal, crashingThread, threads: [{frames: [{func, file, line}]}], registers, sharedLibs}
+3. The crashing thread's frame[0] is the exact crash location
+4. Read the source file at the crash location, identify the root cause
+5. Apply fix, rebuild, verify
 ```
 
 ## System Trace Capture (Perfetto)

@@ -133,6 +133,7 @@ omnibreak stop
 | `leaks` | Memory leak detection — heap tracking, risk escalation |
 | `logs` | Read remote log file (`--path`, `--lines`) |
 | `trace` | Capture Perfetto trace from remote target (system-wide + CPU sampling + auto-summary) |
+| `coredump` | Analyze core dump locally with GDB (no daemon needed) |
 | `deploy` | SCP file to target (standalone, no session needed) |
 | `stop` | End session & cleanup |
 | `health` | Check if daemon is running |
@@ -325,6 +326,18 @@ omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
 
 # Open trace in ui.perfetto.dev → Heap Dump Explorer → see per-function allocation flame graph
 ```
+
+### Coredump post-mortem analysis
+
+```bash
+# Analyze a core dump to find the crash location
+omnibreak coredump --binary ./myapp --core ./core.1234
+# → {signal:"SIGSEGV", crashingThread:"1",
+#    threads:[{id:"1", frames:[{func:"main", file:"main.c", line:42}]}],
+#    registers:{pc:"0x...", sp:"0x..."}}
+```
+
+Pure local operation — no daemon, no SSH needed.
 
 ## Troubleshooting
 

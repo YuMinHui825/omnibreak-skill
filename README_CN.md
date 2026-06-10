@@ -132,6 +132,7 @@ omnibreak stop
 | `leaks` | 内存泄漏检测 — 堆内存追踪，风险等级评估 |
 | `logs` | 读取远程日志文件（`--path`、`--lines`） |
 | `trace` | 采集 Perfetto 系统级 trace（CPU 采样 + 自动摘要） |
+| `coredump` | 本地 GDB 分析 core dump（无需 daemon） |
 | `deploy` | SCP 文件到目标机（独立命令，无需 session） |
 | `stop` | 结束会话并清理 |
 | `health` | 检查 daemon 是否在运行 |
@@ -321,6 +322,18 @@ omnibreak trace --target 192.168.1.100 --user root --duration 10 --sudo \
 
 # 打开 trace → Heap Dump Explorer → 查看每个函数的分配火焰图
 ```
+
+### Core dump 事后分析
+
+```bash
+# 分析 core dump，定位崩溃位置
+omnibreak coredump --binary ./myapp --core ./core.1234
+# → {signal:"SIGSEGV", crashingThread:"1",
+#    threads:[{id:"1", frames:[{func:"main", file:"main.c", line:42}]}],
+#    registers:{pc:"0x...", sp:"0x..."}}
+```
+
+纯本地操作，无需 daemon、无需 SSH。
 
 ## Troubleshooting
 
