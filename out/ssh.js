@@ -1,10 +1,35 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.sshExecSafe = sshExecSafe;
+exports.sshExecSafeLong = sshExecSafeLong;
 exports.sshExec = sshExec;
 exports.scpDeploy = scpDeploy;
 const child_process_1 = require("child_process");
 const ssh2_1 = require("ssh2");
 function esc(s) { return s.replace(/'/g, "'\\''"); }
+/** Safe remote exec via base64 encoding — eliminates shell injection risk.
+ *  The command is base64-encoded before transmission, so no escaping is needed. */
+function sshExecSafe(c, cmd) {
+    const b64 = Buffer.from(cmd).toString('base64');
+    return sshExec(c, `"echo ${b64} | base64 -d | sh"`);
+}
+/** sshExecSafe with configurable timeout for long-running commands */
+function sshExecSafeLong(c, cmd, timeoutMs) {
+    const b64 = Buffer.from(cmd).toString('base64');
+    if (c.password) {
+        const hasSshpass = (() => { try {
+            require('child_process').execSync('which sshpass 2>/dev/null', { stdio: 'pipe' });
+            return true;
+        }
+        catch {
+            return false;
+        } })();
+        if (hasSshpass) {
+            return require('child_process').execSync(`SSHPASS='${esc(c.password)}' sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${c.port} ${esc(c.user)}@${esc(c.host)} "echo ${b64} | base64 -d | sh"`, { timeout: timeoutMs, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 });
+        }
+    }
+    return sshExec(c, `"echo ${b64} | base64 -d | sh"`);
+}
 function hasSshpass() {
     try {
         (0, child_process_1.execSync)('which sshpass 2>/dev/null', { stdio: 'pipe' });

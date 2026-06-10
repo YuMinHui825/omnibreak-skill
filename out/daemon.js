@@ -104,7 +104,7 @@ async function handleAttach(body) {
     // Resolve PID
     let pid = String(body.pid || '');
     if (!pid && body.processName) {
-        pid = (0, ssh_1.sshExec)(c, `"pgrep -f '${esc(body.processName)}' | head -1"`).trim();
+        pid = (0, ssh_1.sshExecSafe)(c, `pgrep -f '${esc(body.processName)}' | head -1`).trim();
     }
     if (!pid)
         return fail(`Process not found`, 'SESSION');
@@ -213,7 +213,7 @@ async function handleLogs(data) {
         return fail('Log path required', 'SESSION');
     try {
         const lines = parseInt(data.lines) || 100;
-        const out = (0, ssh_1.sshExec)(c, `"tail -n ${lines} ${path} 2>/dev/null || echo 'LOG_NOT_FOUND'"`);
+        const out = (0, ssh_1.sshExecSafe)(c, `tail -n ${lines} '${esc(path)}' 2>/dev/null || echo LOG_NOT_FOUND`);
         if (out.includes('LOG_NOT_FOUND'))
             return fail(`Log file not found: ${path}`);
         return ok({ result: JSON.stringify({ path, lines: out.trim().split('\n') }) });
