@@ -68,16 +68,33 @@ npm test
 
 集成测试默认连接 `ubuntu@192.168.64.2:1234`，可在 `test/setup.ts` 中修改。
 
-### Claude Code 集成
+### AI Agent 集成
+
+**最简单的方式** — 直接把这段发给你的 Agent，让它自己安装：
+
+> 从 https://github.com/YuMinHui825/omnibreak-skill 安装 OmniBreak 并完成配置
+
+Agent 会自动读取仓库、执行 `npm install --production && npm link` 并配置 skill。
+
+#### Claude Code
 
 ```bash
 mkdir -p ~/.claude/skills/omnibreak
 cp SKILL.md ~/.claude/skills/omnibreak/SKILL.md
 ```
 
-首次安装后需重启 Claude Code。
+首次安装后需重启 Claude Code。也可以在 Claude Code 中用 `/skill add` 指向仓库地址。
 
-安装后，Claude 可以自主完成整个调试闭环——不需要你手动操作任何命令：
+#### Codex / Cursor / 其他 Agent
+
+```bash
+git clone https://github.com/YuMinHui825/omnibreak-skill.git
+cd omnibreak-skill && npm install --production && npm link
+```
+
+然后告诉 Agent：*"使用 `omnibreak` CLI 进行远程 Linux 调试。命令：daemon、launch、break、continue、status、stop、trace、coredump、stats、leaks、logs、deploy、watch。全部返回 JSON。"*
+
+安装后，Agent 可以自主完成整个调试闭环——不需要你手动操作任何命令：
 
 1. **主动询问缺失信息** — 目标 IP、SSH 密码、二进制路径、源码位置、构建命令等
 2. **编译 + 部署** — 自动编译带 `-g` 调试符号，SCP 到远程

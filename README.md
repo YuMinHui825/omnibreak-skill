@@ -69,16 +69,33 @@ npm test
 Integration tests target `ubuntu@192.168.64.2:1234` by default.  
 Override in `test/setup.ts`.
 
-### Claude Code Integration
+### AI Agent Integration
+
+**Easiest way** — just paste this to your agent and let it install itself:
+
+> Install OmniBreak from https://github.com/YuMinHui825/omnibreak-skill and set it up
+
+The agent will read the repo, run `npm install --production && npm link`, and configure the skill automatically.
+
+#### Claude Code
 
 ```bash
 mkdir -p ~/.claude/skills/omnibreak
 cp SKILL.md ~/.claude/skills/omnibreak/SKILL.md
 ```
 
-Restart Claude Code after first install.
+Restart Claude Code after first install. Or use `/skill add` in Claude Code and point to the repo URL.
 
-After installation, Claude can **autonomously** complete the full debug cycle — no manual commands needed:
+#### Codex / Cursor / Other Agents
+
+```bash
+git clone https://github.com/YuMinHui825/omnibreak-skill.git
+cd omnibreak-skill && npm install --production && npm link
+```
+
+Then tell the agent: *"Use the `omnibreak` CLI for remote Linux debugging. Commands: daemon, launch, break, continue, status, stop, trace, coredump, stats, leaks, logs, deploy, watch. All return JSON."*
+
+After installation, the agent can **autonomously** complete the full debug cycle — no manual commands needed:
 
 1. **Asks for missing info** — target IP, SSH password, binary path, source location, build command
 2. **Compiles + deploys** — builds with `-g` debug symbols, SCPs to target
