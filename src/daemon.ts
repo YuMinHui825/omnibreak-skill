@@ -3,7 +3,7 @@ import { GdbMiClient, GdbLaunchOptions } from './gdbMiClient';
 import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from './gdbMiParser';
 import { SourceMapper } from './sourceMapper';
 import { CliOutput, ThreadInfo, FrameInfo, VarInfo, StatsResult, LeakResult, TraceCaptureResult, log } from './types';
-import { SshConfig, sshExec, scpDeploy } from './ssh';
+import { SshConfig, sshExec, sshExecSafe, scpDeploy } from './ssh';
 import { traceCapture } from './trace';
 
 const PORT = 49200;
@@ -72,7 +72,7 @@ async function handleAttach(body: any): Promise<CliOutput> {
   // Resolve PID
   let pid = String(body.pid || '');
   if (!pid && body.processName) {
-    pid = sshExec(c, `"pgrep -f '${esc(body.processName)}' | head -1"`).trim();
+    pid = sshExecSafe(c, `pgrep -f '${esc(body.processName)}' | head -1`).trim();
   }
   if (!pid) return fail(`Process not found`, 'SESSION');
 
@@ -169,7 +169,7 @@ async function handleLogs(data: any): Promise<CliOutput> {
   if (!path) return fail('Log path required', 'SESSION');
   try {
     const lines = parseInt(data.lines) || 100;
-    const out = sshExec(c, `"tail -n ${lines} ${path} 2>/dev/null || echo 'LOG_NOT_FOUND'"`);
+    const out = sshExecSafe(c, `tail -n ${lines} '${esc(path)}' 2>/dev/null || echo LOG_NOT_FOUND`);
     if (out.includes('LOG_NOT_FOUND')) return fail(`Log file not found: ${path}`);
     return ok({ result: JSON.stringify({ path, lines: out.trim().split('\n') }) });
   } catch (e: any) { return fail(`Logs failed: ${e.message}`); }

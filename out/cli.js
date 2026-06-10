@@ -110,6 +110,14 @@ prog.command('logs').description('Read remote log file')
     .option('--user <name>', 'SSH user', 'root')
     .option('--pwd <pass>', 'SSH password')
     .action(o => daemonCall('logs', o).then(jsonLog));
+prog.command('coredump').description('Analyze core dump locally with GDB')
+    .requiredOption('--binary <path>', 'Binary with debug symbols')
+    .requiredOption('--core <path>', 'Core dump file')
+    .option('--gdb <path>', 'GDB binary', '/usr/bin/gdb-multiarch')
+    .action(o => {
+    const { analyzeCoredump } = require('./coredump');
+    console.log(JSON.stringify(analyzeCoredump(o.binary, o.core, o.gdb)));
+});
 prog.command('deploy').description('SCP file to target')
     .requiredOption('--source <path>', 'Local file')
     .requiredOption('--target <host>', 'Target IP')
