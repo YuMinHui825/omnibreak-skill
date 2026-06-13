@@ -69,14 +69,21 @@ async function handleLaunch(body) {
         (0, types_1.log)('info', `Deploying ${body.deploySource} → ${body.target}:${body.binary}`);
         t.deployFile(body.deploySource, body.binary);
     }
-    // Start gdbserver on remote (SSH transport) or locally
+    // Start gdbserver — different commands for local vs remote
+    const isLocal = body.target === 'local';
     const sudo = body.sudo ? 'sudo ' : '';
     try {
         t.exec(`${sudo}pkill -x gdbserver 2>/dev/null || true`);
     }
     catch { }
     if (!body.skipGdbserver) {
-        t.exec(`rm -f /tmp/omnibreak_output.log; setsid stdbuf -o0 ${sudo}gdbserver --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
+        if (isLocal) {
+            // Local: simple background gdbserver, no setsid needed
+            t.exec(`${sudo}gdbserver --multi :${port} &`);
+        }
+        else {
+            t.exec(`rm -f /tmp/omnibreak_output.log; setsid stdbuf -o0 ${sudo}gdbserver --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
+        }
         await new Promise(r => setTimeout(r, 1500));
     }
     // GDB still uses SSH for remote targets; local targets spawn GDB directly
@@ -113,12 +120,18 @@ async function handleAttach(body) {
         return fail('Process not found', 'SESSION');
     if (body.deploySource)
         t.deployFile(body.deploySource, body.binary);
+    const isLocal = body.target === 'local';
     const sudo = body.sudo ? 'sudo ' : '';
     try {
         t.exec(`${sudo}pkill -x gdbserver 2>/dev/null || true`);
     }
     catch { }
-    t.exec(`setsid stdbuf -o0 ${sudo}gdbserver --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &`);
+    if (isLocal) {
+        t.exec(`${sudo}gdbserver --attach :${port} ${pid} &`);
+    }
+    else {
+        t.exec(`setsid stdbuf -o0 ${sudo}gdbserver --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &`);
+    }
     await new Promise(r => setTimeout(r, 1500));
     const id = String(++sessionCounter);
     const mapper = new sourceMapper_1.SourceMapper(body.sourceMap || {});
@@ -304,11 +317,16 @@ async function handleLogs(data) {
     if (!path)
         return fail('Log path required', 'SESSION');
     try {
-        const lines = parseInt(data.lines) || 100;
+        const lines = data.tail ? 50 : (parseInt(data.lines) || 100);
         const out = t.exec(`tail -n ${lines} '${esc(path)}' 2>/dev/null || echo LOG_NOT_FOUND`);
         if (out.includes('LOG_NOT_FOUND'))
             return fail(`Log file not found: ${path}`);
-        return ok({ result: JSON.stringify({ path, lines: out.trim().split('\n') }) });
+        const logLines = out.trim().split('\n');
+        // If --tail mode, also include active session info for correlation
+        const activeList = Array.from(sessions.values()).map(s => ({
+            id: s.id, target: s.target, binary: s.binary,
+        }));
+        return ok({ result: JSON.stringify({ path, lines: logLines, activeSessions: activeList }) });
     }
     catch (e) {
         return fail(`Logs failed: ${e.message}`);

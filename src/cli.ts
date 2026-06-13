@@ -127,9 +127,10 @@ prog.command('trace').description('Capture Perfetto trace from remote target')
 
 // Standalone deploy (works cross-platform: sshpass/scp on Unix, ssh2 SFTP fallback on Windows)
 prog.command('logs').description('Read remote log file')
-  .requiredOption('--target <host>', 'Target Linux IP')
+  .requiredOption('--target <host>', 'Target: IP, local, or docker://<container>')
   .requiredOption('--path <path>', 'Remote log file path')
-  .option('--lines <n>', 'Number of lines to read', '100')
+  .option('--lines <n>', 'Number of lines to read (default 100)')
+  .option('--tail', 'Shorthand for last 50 lines + session correlation')
   .option('--user <name>', 'SSH user', 'root')
   .option('--pwd <pass>', 'SSH password')
   .action(o => daemonCall('logs', o).then(jsonLog));

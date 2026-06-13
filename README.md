@@ -39,6 +39,15 @@ omnibreak stop
 sudo apt install -y gdbserver gdb-multiarch
 ```
 
+### Language Support
+| Language | Support | Notes |
+|----------|---------|-------|
+| C | Full | DWARF debug info via GDB |
+| C++ | Full | Includes `std::thread`, STL containers |
+| Rust | Full | DWARF debug info via GDB, native support |
+| Go | Basic | Breakpoints/variables work; goroutine stacks limited — use `delve` for deep Go debugging |
+| Python | Not supported | Requires `pdb`/`debugpy` toolchain |
+
 ## Install
 
 ### Standalone CLI

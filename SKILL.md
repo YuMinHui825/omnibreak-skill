@@ -41,6 +41,12 @@ Pre-compiled — no build step needed.
 sudo apt install -y gdbserver gdb-multiarch
 ```
 
+### Language Support
+- **C/C++**: Full support — breakpoints, watchpoints, variables, stack traces
+- **Rust**: Full support — GDB reads DWARF debug info from rustc
+- **Go**: Basic support — breakpoints and variables work; for deep goroutine debugging, prefer `delve`
+- **Python**: Not supported — use `pdb` or `debugpy` instead
+
 ## Architecture
 
 OmniBreak uses a **daemon** for persistent GDB sessions. Start once, all commands share state:

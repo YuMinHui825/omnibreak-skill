@@ -21,6 +21,11 @@
     "remote",
     "linux",
     "arm64",
+    "x86_64",
+    "rust",
+    "go",
+    "multi-process",
+    "testing",
     "cli",
     "claude-code"
   ],

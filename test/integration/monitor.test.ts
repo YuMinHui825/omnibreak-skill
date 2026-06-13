@@ -22,6 +22,15 @@ describe('Process Monitoring', () => {
     expect(data.lines.length).toBe(2);
   });
 
+  it('logs --tail returns last 50 lines with session info', () => {
+    const r = cli(`logs --target ${T.host} --user ${T.user} --pwd ${T.password} --path /var/log/syslog --tail`);
+    expect(r.ok).toBe(true);
+    const data = JSON.parse(r.result);
+    expect(data.path).toBe('/var/log/syslog');
+    expect(data.lines.length).toBeLessThanOrEqual(50);
+    expect(data.activeSessions).toBeDefined();
+  });
+
   it('deploy copies file to remote', () => {
     execSync('touch /tmp/omnibreak-test-deploy.txt');
     const r = cli(`deploy --source /tmp/omnibreak-test-deploy.txt --target ${T.host} --dest /tmp/omnibreak-test-deploy.txt --user ${T.user} --pwd ${T.password}`);

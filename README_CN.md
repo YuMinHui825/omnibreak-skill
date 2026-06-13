@@ -39,6 +39,15 @@ omnibreak stop
 sudo apt install -y gdbserver gdb-multiarch
 ```
 
+### 语言支持
+| 语言 | 支持程度 | 说明 |
+|------|---------|------|
+| C | 完整 | DWARF 调试信息，GDB 原生支持 |
+| C++ | 完整 | 含 `std::thread`、STL 容器 |
+| Rust | 完整 | DWARF 调试信息，GDB 原生支持 |
+| Go | 基础 | 断点/变量可用；goroutine 栈有限制 — 深度调试用 `delve` |
+| Python | 不支持 | 需 `pdb`/`debugpy` 工具链 |
+
 ## 安装
 
 ### 独立 CLI
