@@ -3,189 +3,210 @@ import { GdbMiClient, GdbLaunchOptions } from './gdbMiClient';
 import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from './gdbMiParser';
 import { SourceMapper } from './sourceMapper';
 import { CliOutput, ThreadInfo, FrameInfo, VarInfo, StatsResult, LeakResult, TraceCaptureResult, log } from './types';
-import { SshConfig, sshExec, sshExecSafe, scpDeploy } from './ssh';
+import { Transport, createTransport, parseTarget } from './transport';
 import { traceCapture } from './trace';
 
 const PORT = 49200;
+let sessionCounter = 0;
 
-let gdb: GdbMiClient | null = null;
-let mapper: SourceMapper = new SourceMapper({});
-let sessionStarted = false;
-let firstContinue = false;
+interface Session {
+  id: string;
+  gdb: GdbMiClient;
+  mapper: SourceMapper;
+  firstContinue: boolean;
+  target: string;
+  binary: string;
+}
+
+const sessions = new Map<string, Session>();
+let lastId: string | null = null;
 
 function esc(s: string): string { return s.replace(/'/g, "'\\''"); }
-
 function ok(data?: Partial<CliOutput>): CliOutput { return { ok: true, ...data }; }
 function fail(msg: string, code?: CliOutput['code'], hint?: string): CliOutput {
   return { ok: false, error: msg, code, hint };
 }
 
-async function handleLaunch(body: any): Promise<CliOutput> {
-  if (gdb) await gdb.terminate();
-  mapper = new SourceMapper(body.sourceMap || {});
-  const c: SshConfig = { host: body.target, user: body.user || 'root', port: 22, password: body.pwd };
+function getSession(id?: string): Session | null {
+  if (id) return sessions.get(id) || null;
+  if (lastId) return sessions.get(lastId) || null;
+  return null;
+}
 
-  // Deploy
+/** Build transport from target string. Default: SSH transport (backward compatible). */
+function getTransport(data: any): Transport {
+  const sshPort = data.sshPort ? parseInt(data.sshPort) : 22;
+  const cfg = parseTarget(data.target || 'local', data.user || 'root', data.pwd, sshPort);
+  return createTransport(cfg);
+}
+
+async function handleLaunch(body: any): Promise<CliOutput> {
+  const t = getTransport(body);
+  const port = body.port || 2345;
+
   if (body.deploySource) {
     log('info', `Deploying ${body.deploySource} → ${body.target}:${body.binary}`);
-    scpDeploy(body.deploySource, c, body.binary);
+    t.deployFile(body.deploySource, body.binary);
   }
 
-  // Start gdbserver
+  // Start gdbserver on remote (SSH transport) or locally
   const sudo = body.sudo ? 'sudo ' : '';
-  try { sshExec(c, `"${sudo}pkill -x gdbserver 2>/dev/null || true"`); } catch {}
+  try { t.exec(`${sudo}pkill -x gdbserver 2>/dev/null || true`); } catch {}
   if (!body.skipGdbserver) {
-    sshExec(c, `"rm -f /tmp/omnibreak_output.log; setsid stdbuf -o0 ${sudo}gdbserver --multi :${body.port || 2345} >/tmp/omnibreak_output.log 2>&1 &"`);
+    t.exec(`rm -f /tmp/omnibreak_output.log; setsid stdbuf -o0 ${sudo}gdbserver --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
     await new Promise(r => setTimeout(r, 1500));
   }
 
-  // Start GDB
-  gdb = new GdbMiClient({ gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch', sshRemote: { host: body.target, user: body.user || 'root', port: 22, password: body.pwd } });
+  // GDB still uses SSH for remote targets; local targets spawn GDB directly
+  const id = String(++sessionCounter);
+  const mapper = new SourceMapper(body.sourceMap || {});
+  const gdb = new GdbMiClient({
+    gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch',
+    sshRemote: body.target === 'local' ? undefined : { host: body.target, user: body.user || 'root', port: 22, password: body.pwd },
+  });
   await gdb.init();
   await gdb.sendCommand(body.nonStop ? '-gdb-set non-stop on' : '-gdb-set non-stop off');
   await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
   await gdb.sendCommand(`-interpreter-exec console "set remote exec-file ${body.binary}"`);
-  await gdb.sendCommand(`-target-select extended-remote localhost:${body.port || 2345}`);
-  firstContinue = true; // Program will start on first continue (breakpoint-hit or _start)
+  await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
+
+  const session: Session = { id, gdb, mapper, firstContinue: true, target: body.target, binary: body.binary };
+  sessions.set(id, session);
+  lastId = id;
+
   await new Promise<void>(resolve => {
-    const onStop = (data: string) => {
-      if (data.includes('exited-normally')) { resolve(); return; }
-      resolve();
-      gdb?.removeListener('stopped', onStop);
-    };
-    gdb!.on('stopped', onStop);
-    // Timeout fallback after 5s
-    setTimeout(() => { gdb?.removeListener('stopped', onStop); resolve(); }, 5000);
+    const onStop = (_data: string) => { resolve(); gdb.removeListener('stopped', onStop); };
+    gdb.on('stopped', onStop);
+    setTimeout(() => { gdb.removeListener('stopped', onStop); resolve(); }, 5000);
   });
   await new Promise(r => setTimeout(r, 300));
 
-  sessionStarted = true;
-  return await handleStatus();
+  return await handleStatusById(session);
 }
 
 async function handleAttach(body: any): Promise<CliOutput> {
-  if (gdb) await gdb.terminate();
-  mapper = new SourceMapper(body.sourceMap || {});
-  const c: SshConfig = { host: body.target, user: body.user || 'root', port: 22, password: body.pwd };
+  const t = getTransport(body);
   const port = body.port || 2345;
 
-  // Resolve PID
   let pid = String(body.pid || '');
   if (!pid && body.processName) {
-    pid = sshExecSafe(c, `pgrep -f '${esc(body.processName)}' | head -1`).trim();
+    pid = t.exec(`pgrep -f '${esc(body.processName)}' | head -1`).trim();
   }
-  if (!pid) return fail(`Process not found`, 'SESSION');
+  if (!pid) return fail('Process not found', 'SESSION');
 
-  // Deploy before attach
-  if (body.deploySource) scpDeploy(body.deploySource, c, body.binary);
+  if (body.deploySource) t.deployFile(body.deploySource, body.binary);
 
   const sudo = body.sudo ? 'sudo ' : '';
-  try { sshExec(c, `"${sudo}pkill -x gdbserver 2>/dev/null || true"`); } catch {}
-  sshExec(c, `"setsid stdbuf -o0 ${sudo}gdbserver --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &"`);
+  try { t.exec(`${sudo}pkill -x gdbserver 2>/dev/null || true`); } catch {}
+  t.exec(`setsid stdbuf -o0 ${sudo}gdbserver --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &`);
   await new Promise(r => setTimeout(r, 1500));
 
-  gdb = new GdbMiClient({ gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch', sshRemote: { host: body.target, user: body.user || 'root', port: 22, password: body.pwd } });
+  const id = String(++sessionCounter);
+  const mapper = new SourceMapper(body.sourceMap || {});
+  const gdb = new GdbMiClient({
+    gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch',
+    sshRemote: body.target === 'local' ? undefined : { host: body.target, user: body.user || 'root', port: 22, password: body.pwd },
+  });
   await gdb.init();
   if (body.solibPath) await gdb.sendCommand(`-interpreter-exec console "set solib-search-path ${body.solibPath}"`);
   if (body.binary) await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
   await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
 
-  sessionStarted = true;
-  return await handleStatus();
+  const session: Session = { id, gdb, mapper, firstContinue: false, target: body.target, binary: body.binary || '' };
+  sessions.set(id, session);
+  lastId = id;
+
+  return await handleStatusById(session);
 }
 
-async function handleStop(): Promise<CliOutput> {
-  if (gdb) { await gdb.terminate(); gdb = null; }
-  sessionStarted = false;
+async function handleStop(sessionId?: string): Promise<CliOutput> {
+  if (sessionId) {
+    const s = sessions.get(sessionId);
+    if (s) { await s.gdb.terminate(); sessions.delete(sessionId); }
+    if (lastId === sessionId) lastId = null;
+    return ok();
+  }
+  for (const [id, s] of sessions) {
+    try { await s.gdb.terminate(); } catch {}
+    sessions.delete(id);
+  }
+  lastId = null;
   return ok();
 }
 
-async function handleBreak(file: string, line: number, condition?: string): Promise<CliOutput> {
-  if (!gdb) return fail('No session', 'SESSION');
+function requireSession(sid?: string): Session {
+  const s = getSession(sid);
+  if (!s) throw new Error('No active session. Use launch or attach first.');
+  return s;
+}
+
+async function handleBreak(sid: string | undefined, file: string, line: number, condition?: string): Promise<CliOutput> {
+  const s = requireSession(sid);
   try {
-    await gdb.sendCommand('-gdb-set breakpoint pending on').catch(() => {});
+    await s.gdb.sendCommand('-gdb-set breakpoint pending on').catch(() => {});
     const loc = `-f ${file}:${line}`;
     const cmd = condition ? `-break-insert ${loc} -c "${condition}"` : `-break-insert ${loc}`;
-    const result = await gdb.sendCommand(cmd);
+    const result = await s.gdb.sendCommand(cmd);
     const info = parseBreakpoint(result.data);
-    return ok({ breakpoints: [{ id: parseInt(info.number||'0'), file, line, verified: true }] });
+    return ok({ breakpoints: [{ id: parseInt(info.number || '0'), file, line, verified: true }] });
   } catch (e: any) { return fail(`Breakpoint failed: ${e.message}`); }
 }
 
-function waitForStop(timeoutMs = 10000): Promise<void> {
+function waitForStop(s: Session, timeoutMs = 10000): Promise<void> {
   return new Promise<void>(resolve => {
-    const onStop = () => { resolve(); gdb?.removeListener('stopped', onStop); };
-    gdb!.on('stopped', onStop);
-    setTimeout(() => { gdb?.removeListener('stopped', onStop); resolve(); }, timeoutMs);
+    const onStop = () => { resolve(); s.gdb.removeListener('stopped', onStop); };
+    s.gdb.on('stopped', onStop);
+    setTimeout(() => { s.gdb.removeListener('stopped', onStop); resolve(); }, timeoutMs);
   });
 }
 
-async function handleContinue(): Promise<CliOutput> {
-  if (!gdb) return fail('No session', 'SESSION');
-  if (firstContinue) {
-    firstContinue = false;
-    await gdb.sendCommand('-exec-run');
-    await waitForStop();
+async function handleContinue(sid?: string): Promise<CliOutput> {
+  const s = requireSession(sid);
+  if (s.firstContinue) {
+    s.firstContinue = false;
+    await s.gdb.sendCommand('-exec-run');
+    await waitForStop(s);
     await new Promise(r => setTimeout(r, 300));
-    return await handleStatus();
+    return await handleStatusById(s);
   }
-  await gdb.sendCommand('-exec-continue');
-  await waitForStop();
+  await s.gdb.sendCommand('-exec-continue');
+  await waitForStop(s);
   await new Promise(r => setTimeout(r, 300));
-  return await handleStatus();
+  return await handleStatusById(s);
 }
 
-async function handleNext(): Promise<CliOutput> {
-  if (!gdb) return fail('No session', 'SESSION');
-  await gdb.sendCommand('-exec-next');
-  await waitForStop();
+async function handleNext(sid?: string): Promise<CliOutput> {
+  const s = requireSession(sid);
+  await s.gdb.sendCommand('-exec-next');
+  await waitForStop(s);
   await new Promise(r => setTimeout(r, 300));
-  return await handleStatus();
+  return await handleStatusById(s);
 }
 
-async function handleStep(): Promise<CliOutput> {
-  if (!gdb) return fail('No session', 'SESSION');
-  await gdb.sendCommand('-exec-step');
-  await waitForStop();
+async function handleStep(sid?: string): Promise<CliOutput> {
+  const s = requireSession(sid);
+  await s.gdb.sendCommand('-exec-step');
+  await waitForStop(s);
   await new Promise(r => setTimeout(r, 300));
-  return await handleStatus();
+  return await handleStatusById(s);
 }
 
-async function handleWatch(expr: string, type?: string): Promise<CliOutput> {
-  if (!gdb) return fail('No session', 'SESSION');
+async function handleWatch(sid: string | undefined, expr: string, type?: string): Promise<CliOutput> {
+  const s = requireSession(sid);
   try {
     let cmd = '-break-watch';
     if (type === 'read') cmd += ' -r';
     else if (type === 'access') cmd += ' -a';
-    const result = await gdb.sendCommand(`${cmd} ${expr}`);
+    const result = await s.gdb.sendCommand(`${cmd} ${expr}`);
     const info = parseBreakpoint(result.data);
     return ok({ breakpoints: [{ id: parseInt(info.number || '0'), file: expr, line: 0, verified: true }] });
   } catch (e: any) { return fail(`Watchpoint failed: ${e.message}`); }
 }
 
-async function handleLogs(data: any): Promise<CliOutput> {
-  const c: SshConfig = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
-  const path = data.path;
-  if (!path) return fail('Log path required', 'SESSION');
-  try {
-    const lines = parseInt(data.lines) || 100;
-    const out = sshExecSafe(c, `tail -n ${lines} '${esc(path)}' 2>/dev/null || echo LOG_NOT_FOUND`);
-    if (out.includes('LOG_NOT_FOUND')) return fail(`Log file not found: ${path}`);
-    return ok({ result: JSON.stringify({ path, lines: out.trim().split('\n') }) });
-  } catch (e: any) { return fail(`Logs failed: ${e.message}`); }
-}
-
-async function handleGdb(cmd: string): Promise<CliOutput> {
-  if (!gdb) return fail('No session', 'SESSION');
-  const result = await gdb.sendCommand(cmd);
-  return ok({ result: result.data });
-}
-
-async function handleStatus(): Promise<CliOutput> {
-  if (!gdb) return fail('No session', 'SESSION');
+async function handleStatusById(s: Session): Promise<CliOutput> {
   try {
     const out: CliOutput = { ok: true, status: 'stopped' };
-    const threads = await gdb.sendCommand('-thread-info');
+    const threads = await s.gdb.sendCommand('-thread-info');
     const tinfo: ThreadInfo[] = parseThreadInfo(threads.data).map(t => ({
       id: parseInt(t.id), name: t.name, state: t.state
     }));
@@ -193,54 +214,86 @@ async function handleStatus(): Promise<CliOutput> {
     if (tinfo.length > 0) out.threadId = tinfo[0].id;
 
     try {
-      const frames = await gdb.sendCommand('-stack-list-frames 0 20');
+      const frames = await s.gdb.sendCommand('-stack-list-frames 0 20');
       const finfo: FrameInfo[] = parseFrames(frames.data).map(f => ({
-        level: parseInt(f['level']||'0'), func: f['func']||'??',
-        file: mapper.compileToLocal(f['fullname']||f['file']||''),
-        line: parseInt(f['line']||'0')
+        level: parseInt(f['level'] || '0'), func: f['func'] || '??',
+        file: s.mapper.compileToLocal(f['fullname'] || f['file'] || ''),
+        line: parseInt(f['line'] || '0')
       }));
       out.frames = finfo;
       if (finfo.length > 0) { out.file = finfo[0].file; out.line = finfo[0].line; }
     } catch {}
 
     try {
-      const vars = await gdb.sendCommand('-stack-list-variables --simple-values');
-      out.vars = parseVariables(vars.data).map(v => ({ name: v['name']||'??', value: v['value']||'' }));
+      const vars = await s.gdb.sendCommand('-stack-list-variables --simple-values');
+      out.vars = parseVariables(vars.data).map(v => ({ name: v['name'] || '??', value: v['value'] || '' }));
     } catch {}
 
     return out;
   } catch (e: any) { return fail(`Status: ${e.message}`); }
 }
 
-async function handleCrash(): Promise<CliOutput> {
-  if (!gdb) return fail('No session', 'SESSION');
-  const frames = await gdb.sendCommand('-stack-list-frames 0 500');
-  const finfo: FrameInfo[] = parseFrames(frames.data).map(f => ({
-    level: parseInt(f['level']||'0'), func: f['func']||'??',
-    file: mapper.compileToLocal(f['fullname']||f['file']||''),
-    line: parseInt(f['line']||'0')
-  }));
-  return ok({ status:'stopped', reason:'signal-received', frames: finfo });
+async function handleStatus(sid?: string): Promise<CliOutput> {
+  const s = getSession(sid);
+  if (!s) {
+    if (sessions.size === 0) return fail('No active session', 'SESSION');
+    const list = Array.from(sessions.values()).map(s => ({
+      id: s.id, target: s.target, binary: s.binary,
+    }));
+    return ok({ result: JSON.stringify({ sessions: list, activeCount: sessions.size }) });
+  }
+  return await handleStatusById(s);
 }
 
-async function handleEval(expr: string): Promise<CliOutput> {
-  if (!gdb) return fail('No session', 'SESSION');
-  const result = await gdb.sendCommand(`-data-evaluate-expression "${expr}"`);
+async function handleCrash(sid?: string): Promise<CliOutput> {
+  const s = requireSession(sid);
+  const frames = await s.gdb.sendCommand('-stack-list-frames 0 500');
+  const finfo: FrameInfo[] = parseFrames(frames.data).map(f => ({
+    level: parseInt(f['level'] || '0'), func: f['func'] || '??',
+    file: s.mapper.compileToLocal(f['fullname'] || f['file'] || ''),
+    line: parseInt(f['line'] || '0')
+  }));
+  return ok({ status: 'stopped', reason: 'signal-received', frames: finfo });
+}
+
+async function handleEval(sid: string | undefined, expr: string): Promise<CliOutput> {
+  const s = requireSession(sid);
+  const result = await s.gdb.sendCommand(`-data-evaluate-expression "${expr}"`);
   const m = result.data.match(/done,value="([^"]*)"/);
   return ok({ result: m ? m[1] : result.data });
 }
 
+async function handleGdbRaw(sid: string | undefined, cmd: string): Promise<CliOutput> {
+  const s = requireSession(sid);
+  const result = await s.gdb.sendCommand(cmd);
+  return ok({ result: result.data });
+}
+
+// ═══ Transport-backed handlers (logs, stats, leaks, trace) ═══
+
+async function handleLogs(data: any): Promise<CliOutput> {
+  const t = getTransport(data);
+  const path = data.path;
+  if (!path) return fail('Log path required', 'SESSION');
+  try {
+    const lines = parseInt(data.lines) || 100;
+    const out = t.exec(`tail -n ${lines} '${esc(path)}' 2>/dev/null || echo LOG_NOT_FOUND`);
+    if (out.includes('LOG_NOT_FOUND')) return fail(`Log file not found: ${path}`);
+    return ok({ result: JSON.stringify({ path, lines: out.trim().split('\n') }) });
+  } catch (e: any) { return fail(`Logs failed: ${e.message}`); }
+}
+
 async function handleTraceCapture(data: any): Promise<CliOutput> {
-  const c: SshConfig = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
+  // trace capture only works with SSH transport (needs SCP + remote tracebox)
+  if (data.target === 'local') return fail('Trace capture requires SSH target', 'CONNECTION');
+  // traceCapture expects SshConfig from ssh.ts — pass compatible config
+  const c = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
   const durationSec = parseInt(data.duration) || 10;
   const outputPath = data.output || './trace.pftrace';
-
   if (!data.target) return fail('Target host required', 'CONNECTION');
-
   try {
     const result: TraceCaptureResult = traceCapture(c, {
-      durationSec,
-      outputPath,
+      durationSec, outputPath,
       events: data.events || undefined,
       sudo: !!data.sudo,
       sudoPwd: data.sudoPwd || data.pwd,
@@ -252,16 +305,15 @@ async function handleTraceCapture(data: any): Promise<CliOutput> {
 }
 
 async function handleStats(data: any): Promise<CliOutput> {
-  const c: SshConfig = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
+  const t = getTransport(data);
   const pid = parseInt(data.pid) || 0;
   if (!pid) return fail('PID required', 'SESSION');
   try {
-    const out = sshExec(c, `"ps -p ${pid} -o %cpu=,rss=,vsz=,nlwp=,stat= --no-headers 2>/dev/null || echo '0 0 0 0 ?'"`).trim();
+    const out = t.exec(`ps -p ${pid} -o %cpu=,rss=,vsz=,nlwp=,stat= --no-headers 2>/dev/null || echo '0 0 0 0 ?'`).trim();
     const vals = out.split(/\s+/);
     const rssKB = parseInt(vals[1]) || 0;
     const result: StatsResult = {
-      pid,
-      cpuPercent: parseFloat(vals[0]) || 0,
+      pid, cpuPercent: parseFloat(vals[0]) || 0,
       rssMB: Math.round(rssKB / 1024 * 10) / 10,
       vszMB: Math.round((parseInt(vals[2]) || 0) / 1024),
       threadCount: parseInt(vals[3]) || 0,
@@ -272,58 +324,50 @@ async function handleStats(data: any): Promise<CliOutput> {
 }
 
 async function handleLeaks(data: any): Promise<CliOutput> {
-  const c: SshConfig = { host: data.target, user: data.user || 'root', port: 22, password: data.pwd };
+  const t = getTransport(data);
   const pid = parseInt(data.pid) || 0;
   if (!pid) return fail('PID required', 'SESSION');
   try {
-    // Read smaps for heap/stack/data
-    const smaps = sshExec(c, `"cat /proc/${pid}/smaps 2>/dev/null"`);
-    const status = sshExec(c, `"grep -E '^(Vm|Rss)' /proc/${pid}/status 2>/dev/null"`);
-    const st: Record<string,number> = {};
+    const smaps = t.exec(`cat /proc/${pid}/smaps 2>/dev/null`);
+    const status = t.exec(`grep -E '^(Vm|Rss)' /proc/${pid}/status 2>/dev/null`);
+    const st: Record<string, number> = {};
     status.split('\n').forEach(line => {
       const m = line.match(/^(\w+):\s+(\d+)/);
-      if(m) st[m[1].toLowerCase()] = parseInt(m[2]);
+      if (m) st[m[1].toLowerCase()] = parseInt(m[2]);
     });
-    let heapKB=0, stackKB=0, curAddr='', curSize=0;
+    let heapKB = 0, stackKB = 0, curAddr = '', curSize = 0;
     smaps.split('\n').forEach(line => {
       const am = line.match(/^([0-9a-f]+)-/);
-      if(am){if(curAddr.includes('[heap]'))heapKB+=curSize;if(curAddr.includes('[stack]'))stackKB+=curSize;curAddr=line;curSize=0}
-      const sm = line.match(/^Size:\s+(\d+)/); if(sm)curSize=parseInt(sm[1]);
+      if (am) { if (curAddr.includes('[heap]')) heapKB += curSize; if (curAddr.includes('[stack]')) stackKB += curSize; curAddr = line; curSize = 0; }
+      const sm = line.match(/^Size:\s+(\d+)/); if (sm) curSize = parseInt(sm[1]);
     });
-    if(curAddr.includes('[heap]'))heapKB+=curSize;
-    if(curAddr.includes('[stack]'))stackKB+=curSize;
-    // Rolling samples via remote file
+    if (curAddr.includes('[heap]')) heapKB += curSize;
+    if (curAddr.includes('[stack]')) stackKB += curSize;
     const sampleFile = `/tmp/omnibreak-leak-${pid}.json`;
     let samples: number[] = [];
-    try { samples = JSON.parse(sshExec(c, `"cat ${sampleFile} 2>/dev/null || echo '[]'"`).trim()); } catch {}
-    if(!Array.isArray(samples)) samples = [];
+    try { samples = JSON.parse(t.exec(`cat ${sampleFile} 2>/dev/null || echo '[]'`).trim()); } catch {}
+    if (!Array.isArray(samples)) samples = [];
     samples.push(heapKB);
-    if(samples.length > 60) samples = samples.slice(-60);
-    const sampleJson = JSON.stringify(samples);
-    sshExec(c, `"printf '%s' '${sampleJson.replace(/'/g, "'\\''")}' > ${sampleFile}"`);
-    // Risk detection
+    if (samples.length > 60) samples = samples.slice(-60);
+    t.exec(`printf '%s' '${JSON.stringify(samples).replace(/'/g, "'\\''")}' > ${sampleFile}`);
     let risk: LeakResult['risk'] = 'none';
-    if(samples.length >= 10) {
+    if (samples.length >= 10) {
       const n = samples.length;
-      const firstQ = samples.slice(0, Math.floor(n/4)).reduce((a,b)=>a+b,0) / Math.floor(n/4);
-      const lastQ = samples.slice(-Math.floor(n/4)).reduce((a,b)=>a+b,0) / Math.floor(n/4);
+      const firstQ = samples.slice(0, Math.floor(n / 4)).reduce((a, b) => a + b, 0) / Math.floor(n / 4);
+      const lastQ = samples.slice(-Math.floor(n / 4)).reduce((a, b) => a + b, 0) / Math.floor(n / 4);
       const growth = lastQ - firstQ;
       let growing = 0;
-      for(let i=1;i<n;i++) if(samples[i] > samples[0]) growing++;
-      const growthRatio = growing / (n-1);
-      if(growth > 128 && growthRatio > 0.7) risk = 'high';
-      else if(growth > 64 && growthRatio > 0.5) risk = 'medium';
-      else if(growth > 0 && growthRatio > 0.4) risk = 'low';
+      for (let i = 1; i < n; i++) if (samples[i] > samples[0]) growing++;
+      const growthRatio = growing / (n - 1);
+      if (growth > 128 && growthRatio > 0.7) risk = 'high';
+      else if (growth > 64 && growthRatio > 0.5) risk = 'medium';
+      else if (growth > 0 && growthRatio > 0.4) risk = 'low';
     }
     const result: LeakResult = {
-      pid,
-      heapKB, stackKB,
-      dataKB: (st.vmdata || 0),
-      rssKB: (st.vmrss || 0),
-      vszKB: (st.vmsize || 0),
+      pid, heapKB, stackKB,
+      dataKB: (st.vmdata || 0), rssKB: (st.vmrss || 0), vszKB: (st.vmsize || 0),
       heapDeltaKB: samples.length > 1 ? heapKB - samples[0] : 0,
-      risk,
-      sampleCount: samples.length,
+      risk, sampleCount: samples.length,
     };
     return ok({ result: JSON.stringify(result) });
   } catch (e: any) { return fail(`Leak scan failed: ${e.message}`); }
@@ -340,26 +384,27 @@ if (require.main === module) {
         const url = new URL(req.url || '/', `http://localhost:${PORT}`);
         const cmd = url.pathname.replace(/^\//, '');
         const data = body ? JSON.parse(body) : {};
-        if (data.file) data.file = String(data.file);  // TypeScript string coercion
+        if (data.file) data.file = String(data.file);
+        const sid: string | undefined = data.session;
 
         switch (cmd) {
           case 'launch': result = await handleLaunch(data); break;
           case 'attach': result = await handleAttach(data); break;
-          case 'stop': result = await handleStop(); break;
-          case 'break': result = await handleBreak(String(data.file), parseInt(data.line), data.condition); break;
-          case 'continue': result = await handleContinue(); break;
-          case 'next': result = await handleNext(); break;
-          case 'step': result = await handleStep(); break;
-          case 'status': result = await handleStatus(); break;
-          case 'crash': result = await handleCrash(); break;
-          case 'eval': result = await handleEval(String(data.expr)); break;
-          case 'gdb': result = await handleGdb(String(data.cmd)); break;
-          case 'watch': result = await handleWatch(String(data.expr), String(data.type || '')); break;
+          case 'stop': result = await handleStop(sid); break;
+          case 'break': result = await handleBreak(sid, String(data.file), parseInt(data.line), data.condition); break;
+          case 'continue': result = await handleContinue(sid); break;
+          case 'next': result = await handleNext(sid); break;
+          case 'step': result = await handleStep(sid); break;
+          case 'status': result = await handleStatus(sid); break;
+          case 'crash': result = await handleCrash(sid); break;
+          case 'eval': result = await handleEval(sid, String(data.expr)); break;
+          case 'gdb': result = await handleGdbRaw(sid, String(data.cmd)); break;
+          case 'watch': result = await handleWatch(sid, String(data.expr), String(data.type || '')); break;
           case 'logs': result = await handleLogs(data); break;
           case 'stats': result = await handleStats(data); break;
           case 'leaks': result = await handleLeaks(data); break;
           case 'trace-capture': result = await handleTraceCapture(data); break;
-          case 'health': result = ok({ result: 'daemon running' }); break;
+          case 'health': result = ok({ result: `daemon running, ${sessions.size} session(s) active` }); break;
         }
       } catch (e: any) { result = fail(e.message); }
       res.writeHead(200, { 'Content-Type': 'application/json' });

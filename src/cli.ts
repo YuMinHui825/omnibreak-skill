@@ -36,7 +36,7 @@ prog.command('daemon').description('Start the session daemon (run in background:
 
 // Debug commands (all via daemon)
 prog.command('launch').description('Start a debug session')
-  .requiredOption('--target <host>', 'Target Linux IP')
+  .requiredOption('--target <host>', 'Target: IP, local, or docker://<container>')
   .requiredOption('--binary <path>', 'Remote binary path')
   .option('--user <name>', 'SSH user', 'root')
   .option('--port <n>', 'gdbserver port', '2345')
@@ -65,20 +65,40 @@ prog.command('break').description('Set breakpoint')
   .requiredOption('--file <path>', 'Source file')
   .requiredOption('--line <n>', 'Line number')
   .option('--condition <expr>', 'Condition')
+  .option('--session <id>', 'Session ID (default: most recent)')
   .action(o => daemonCall('break', o).then(jsonLog));
 
-prog.command('continue').alias('c').description('Continue execution').action(() => daemonCall('continue').then(jsonLog));
-prog.command('next').alias('n').description('Step over').action(() => daemonCall('next').then(jsonLog));
-prog.command('step').alias('s').description('Step into').action(() => daemonCall('step').then(jsonLog));
-prog.command('status').description('Get debug state').action(() => daemonCall('status').then(jsonLog));
-prog.command('crash').description('Crash backtrace').action(() => daemonCall('crash').then(jsonLog));
-prog.command('eval').description('Evaluate expression').argument('<expr>').action(e => daemonCall('eval', { expr: e }).then(jsonLog));
-prog.command('gdb').description('Raw GDB/MI command (e.g. gdb -break-delete 1)').allowUnknownOption().argument('<cmd...>').action((_cmd: string, _opts: any, cmdObj: any) => { const all = cmdObj.args.join(' '); daemonCall('gdb', { cmd: all }).then(jsonLog); });
+prog.command('continue').alias('c').description('Continue execution')
+  .option('--session <id>', 'Session ID')
+  .action(o => daemonCall('continue', o).then(jsonLog));
+prog.command('next').alias('n').description('Step over')
+  .option('--session <id>', 'Session ID')
+  .action(o => daemonCall('next', o).then(jsonLog));
+prog.command('step').alias('s').description('Step into')
+  .option('--session <id>', 'Session ID')
+  .action(o => daemonCall('step', o).then(jsonLog));
+prog.command('status').description('Get debug state (or list all sessions)')
+  .option('--session <id>', 'Session ID')
+  .action(o => daemonCall('status', o).then(jsonLog));
+prog.command('crash').description('Crash backtrace')
+  .option('--session <id>', 'Session ID')
+  .action(o => daemonCall('crash', o).then(jsonLog));
+prog.command('eval').description('Evaluate expression')
+  .argument('<expr>')
+  .option('--session <id>', 'Session ID')
+  .action((e, o) => daemonCall('eval', { expr: e, session: o.session }).then(jsonLog));
+prog.command('gdb').description('Raw GDB/MI command')
+  .allowUnknownOption().argument('<cmd...>')
+  .option('--session <id>', 'Session ID')
+  .action((_cmd: string, _opts: any, cmdObj: any) => { const all = cmdObj.args.join(' '); daemonCall('gdb', { cmd: all, session: _opts.session }).then(jsonLog); });
 prog.command('watch').description('Set watchpoint on variable/expression')
   .requiredOption('--expr <expression>', 'Variable or expression to watch')
   .option('--type <mode>', 'read, write (default), or access', 'write')
+  .option('--session <id>', 'Session ID')
   .action(o => daemonCall('watch', o).then(jsonLog));
-prog.command('stop').description('End session').action(() => daemonCall('stop').then(jsonLog));
+prog.command('stop').description('End session(s) — stops all if no --session given')
+  .option('--session <id>', 'Specific session to stop')
+  .action(o => daemonCall('stop', o).then(jsonLog));
 prog.command('health').description('Check daemon').action(() => daemonCall('health').then(jsonLog));
 prog.command('stats').description('Process stats (CPU/RSS/VSZ/threads/state)')
   .requiredOption('--pid <n>', 'Process ID')

@@ -4,6 +4,9 @@ export const BINARIES = {
   multithread: '/tmp/example/build/multithread',
   leakdemo: '/tmp/example/build/leakdemo',
   hello: '/tmp/example/build/hello',
+  // C++ binaries (compile with: g++ -g -Og -pthread -o <name> <name>.cpp)
+  multithreadCpp: '/tmp/example/build/multithread_cpp',
+  leakdemoCpp: '/tmp/example/build/leakdemo_cpp',
 };
 
 import { execSync } from 'child_process';

@@ -5,5 +5,5 @@ module.exports = {
   testMatch: ['**/*.test.ts'],
   moduleFileExtensions: ['ts', 'js', 'json'],
   transform: { '^.+\\.ts$': 'ts-jest' },
-  testTimeout: 120000,  // 2 min for integration tests
+  testTimeout: 120000,
 };
