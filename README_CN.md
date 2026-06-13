@@ -4,8 +4,9 @@
 
 [English](README.md)
 
-远程 Linux 调试 CLI 工具 + Claude Code Skill。  
-通过 GDB/gdbserver 自动化 bug 排查——部署、attach、断点、崩溃捕获。
+**AI 写代码，OmniBreak 让它跑通。**
+
+给你的 vibe coder 装个调试器——部署、打断点、修 bug、循环迭代。真实 Linux、真实硬件、真实修复。远程 Linux 调试 CLI 工具 + AI Agent Skill。
 
 ## 是什么？
 

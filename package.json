@@ -1,7 +1,7 @@
 {
   "name": "omnibreak-skill",
   "version": "0.7.0",
-  "description": "OmniBreak CLI — remote Linux debugger for automated workflows and Claude Code",
+  "description": "AI writes the code. OmniBreak makes it work. Give your vibe coder a debugger — deploy, break, fix, loop on real Linux hardware.",
   "bin": {
     "omnibreak": "./out/cli.js"
   },

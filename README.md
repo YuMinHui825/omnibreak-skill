@@ -4,8 +4,9 @@
 
 [:cn: 中文文档](README_CN.md)
 
-CLI tool and Claude Code Skill for remote Linux debugging via GDB/gdbserver.  
-Automate bug investigation — deploy, attach, breakpoints, crash capture.
+**AI writes the code. OmniBreak makes it work.**
+
+Give your vibe coder a debugger — deploy, break, fix, loop. Real Linux, real hardware, real fixes. CLI tool and Claude Code/Cursor/Codex skill for remote Linux debugging via GDB/gdbserver.
 
 ## What is OmniBreak Skill?
 
