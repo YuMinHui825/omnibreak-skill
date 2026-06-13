@@ -420,7 +420,7 @@ MIT
 
 <p align="center">
   <b>If you find OmniBreak useful, please give it a ⭐</b><br/><br/>
-  <img src="IMG_9667.JPG" width="200" alt="Alipay" /><br/>
+  <img src="IMG_9667.JPG" width="200" alt="Alipay" />&nbsp;&nbsp;<img src="IMG_9817.JPG" width="200" alt="WeChat Pay" /><br/>
   <sub>Like this project? <b>Buy me a coffee ☕</b></sub><br/>
   <a href="https://github.com/YuMinHui825/omnibreak-skill">Star on GitHub</a>
 </p>

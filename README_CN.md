@@ -416,7 +416,7 @@ MIT
 
 <p align="center">
   <b>如果觉得有用，点个 ⭐ 支持一下</b><br/><br/>
-  <img src="IMG_9667.JPG" width="200" alt="支付宝" /><br/>
+  <img src="IMG_9667.JPG" width="200" alt="支付宝" />&nbsp;&nbsp;<img src="IMG_9817.JPG" width="200" alt="微信支付" /><br/>
   <sub>感兴趣可以打赏 <b>请喝杯咖啡 ☕</b></sub><br/>
   <a href="https://github.com/YuMinHui825/omnibreak-skill">去 GitHub 点 Star</a>
 </p>
