@@ -135,12 +135,12 @@ omnibreak stop
 | Command | Description |
 |------|------|
 | `daemon` | Start background daemon (required before other commands) |
-| `launch` | Deploy + start binary on target via gdbserver |
+| `launch` | Deploy + start binary on target (`--target IP\|local\|docker://<ctr>`) |
 | `attach` | Attach to a running process |
-| `break` | Set breakpoint (`--file`, `--line`, `--condition`) |
-| `continue` / `c` | Resume execution (auto-returns status with threads/frames/vars) |
-| `next` / `n` | Step over (auto-returns status) |
-| `step` / `s` | Step into (auto-returns status) |
+| `break` | Set breakpoint (`--file`, `--line`, `--condition`, `--session`) |
+| `continue` / `c` | Resume execution (auto-returns status, `--session`) |
+| `next` / `n` | Step over (auto-returns status, `--session`) |
+| `step` / `s` | Step into (auto-returns status, `--session`) |
 | `status` | Full debug state (threads, frames, vars) |
 | `crash` | Crash backtrace (500 frames) |
 | `eval` | Evaluate C expression |
@@ -158,10 +158,10 @@ omnibreak stop
 ### Launch Options
 
 ```
-omnibreak launch --target <IP> --binary <PATH>
-  --user <name>          SSH user (default: root)
+omnibreak launch --target <IP|local|docker://<ctr>> --binary <PATH>
+  --user <name>          SSH user (default: root) — ignored for local/docker
   --port <n>             gdbserver port (default: 2345)
-  --pwd <pass>           SSH password (for scp, gdbserver, and GDB)
+  --pwd <pass>           SSH password — only for SSH target
   --deploy-source <path> Local binary to SCP before launch
   --source-map <json>    Compile-path → local-path mapping
   --sudo                 Use sudo for gdbserver commands
@@ -355,6 +355,35 @@ omnibreak coredump --binary ./myapp --core ./core.1234
 ```
 
 Pure local operation — no daemon, no SSH needed.
+
+### Multi-process debugging
+
+```bash
+# Launch two independent sessions on different ports
+omnibreak launch --target 192.168.1.100 --binary /app/service1 --port 2345
+omnibreak launch --target 192.168.1.100 --binary /app/service2 --port 2346
+
+# health shows session count
+omnibreak health  # → "daemon running, 2 session(s) active"
+
+# Target specific session with --session
+omnibreak break --file handler.cpp --line 42 --session 1
+omnibreak continue --session 2
+
+# Stop specific or all sessions
+omnibreak stop --session 1
+omnibreak stop              # stops all
+```
+
+### Local & Docker targets (no SSH needed)
+
+```bash
+# Debug a local binary directly
+omnibreak launch --target local --binary /tmp/myapp
+
+# Debug inside a Docker container
+omnibreak launch --target docker://mycontainer --binary /app/myapp
+```
 
 ## Troubleshooting
 

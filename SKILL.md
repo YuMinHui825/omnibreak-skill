@@ -65,7 +65,7 @@ omnibreak health              Check if daemon is alive
 
 ### Debug Lifecycle
 ```
-omnibreak launch  --target <IP> --binary <PATH> [--user root] [--port 2345]
+omnibreak launch  --target <IP|local|docker://<ctr>> --binary <PATH> [--user root] [--port 2345]
                   [--pwd <pass>] [--deploy-source <LOCAL>]
                   [--source-map '{".":"/work"}'] [--sudo] [--skip-gdbserver]
 
@@ -73,12 +73,12 @@ omnibreak attach  --target <IP> --process <NAME>|--pid <N>
                   [--binary <PATH>] [--solib-path <DIR>] [--deploy-source <LOCAL>]
                   [--pwd <pass>] [--sudo]
 
-omnibreak break   --file <PATH> --line <N> [--condition "x>100"]
-omnibreak watch   --expr <VAR> [--type write|read|access]
+omnibreak break   --file <PATH> --line <N> [--condition "x>100"] [--session <ID>]
+omnibreak watch   --expr <VAR> [--type write|read|access] [--session <ID>]
     Set data watchpoint. Type defaults to write.
-omnibreak continue | c        Resume — auto-returns status with threads/frames/vars
-omnibreak next    | n         Step over — auto-returns status
-omnibreak step    | s         Step into — auto-returns status
+omnibreak continue | c        Resume — auto-returns status with threads/frames/vars [--session <ID>]
+omnibreak next    | n         Step over — auto-returns status [--session <ID>]
+omnibreak step    | s         Step into — auto-returns status [--session <ID>]
 ```
 
 ### Inspection
@@ -249,13 +249,31 @@ Error codes: `CONNECTION`, `AUTH`, `TIMEOUT`, `BINARY`, `SESSION`, `PTRACE`
 ## Multi-Process Debugging
 
 ```
-1. LAUNCH the first process: omnibreak launch --port 2345 ...
-2. ATTACH to additional processes:
-   omnibreak attach --target <IP> --process <name> --port 2346 [--binary <so>]
-3. Each process has its own gdbserver port and GDB session
-4. Use omnibreak stats/leaks with different --pid for each process
-5. When one process crashes, use omnibreak crash on that session
+1. LAUNCH multiple processes on different ports:
+   omnibreak launch --target <IP> --binary /app/svc1 --port 2345
+   omnibreak launch --target <IP> --binary /app/svc2 --port 2346
+2. Each launch creates an independent session with auto-increment ID
+3. Use omnibreak health to see active session count
+4. All debug commands support --session <ID> to target a specific session
+5. Default (no --session) targets the most recently created session
+6. stop --session <ID> removes one; stop with no args removes all
 ```
+
+## Target Types (Transport)
+
+```
+omnibreak launch supports three target types:
+
+1. SSH (default): --target 192.168.1.100
+   Remote Linux via SSH. Requires --user, --pwd. Uses sshpass or ssh2.
+
+2. Local: --target local
+   No SSH needed. Runs gdbserver and GDB directly on your machine.
+
+3. Docker: --target docker://<container-name>
+   Uses docker exec + docker cp. No SSH needed.
+```
+
 
 ## Diagnostic Report
 

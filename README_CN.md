@@ -134,12 +134,12 @@ omnibreak stop
 | 命令 | 说明 |
 |------|------|
 | `daemon` | 启动后台 daemon（其他命令的前置条件） |
-| `launch` | 部署 + 在目标机上启动程序 |
+| `launch` | 部署 + 启动程序（`--target IP\|local\|docker://<容器>`） |
 | `attach` | 附到运行中进程 |
-| `break` | 设断点（`--file`、`--line`、`--condition`） |
-| `continue` / `c` | 继续执行（自动返回状态：线程、栈帧、变量） |
-| `next` / `n` | 单步跳过（自动返回状态） |
-| `step` / `s` | 单步进入（自动返回状态） |
+| `break` | 设断点（`--file`、`--line`、`--condition`、`--session`） |
+| `continue` / `c` | 继续执行（自动返回状态，`--session`） |
+| `next` / `n` | 单步跳过（自动返回状态，`--session`） |
+| `step` / `s` | 单步进入（自动返回状态，`--session`） |
 | `status` | 完整调试状态（线程、栈帧、变量） |
 | `crash` | 崩溃堆栈（500 帧） |
 | `eval` | 求值 C 表达式 |
@@ -157,10 +157,10 @@ omnibreak stop
 ### Launch 选项
 
 ```
-omnibreak launch --target <IP> --binary <PATH>
-  --user <name>          SSH 用户（默认 root）
+omnibreak launch --target <IP|local|docker://<容器>> --binary <PATH>
+  --user <name>          SSH 用户（默认 root）— local/docker 忽略
   --port <n>             gdbserver 端口（默认 2345）
-  --pwd <pass>           SSH 密码（scp、gdbserver、GDB 通用）
+  --pwd <pass>           SSH 密码 — 仅 SSH 目标需要
   --deploy-source <path> 本地二进制，启动前自动 SCP
   --source-map <json>    编译路径 → 本地路径映射
   --sudo                 使用 sudo 执行 gdbserver 命令
@@ -351,6 +351,35 @@ omnibreak coredump --binary ./myapp --core ./core.1234
 ```
 
 纯本地操作，无需 daemon、无需 SSH。
+
+### 多进程并行调试
+
+```bash
+# 启动两个独立 session（不同端口）
+omnibreak launch --target 192.168.1.100 --binary /app/service1 --port 2345
+omnibreak launch --target 192.168.1.100 --binary /app/service2 --port 2346
+
+# health 显示 session 数量
+omnibreak health  # → "daemon running, 2 session(s) active"
+
+# --session 指定操作哪个
+omnibreak break --file handler.cpp --line 42 --session 1
+omnibreak continue --session 2
+
+# 停止单个或全部
+omnibreak stop --session 1
+omnibreak stop              # 停止全部
+```
+
+### 本地 & Docker 目标（无需 SSH）
+
+```bash
+# 直接调试本地二进制
+omnibreak launch --target local --binary /tmp/myapp
+
+# 调试 Docker 容器内程序
+omnibreak launch --target docker://mycontainer --binary /app/myapp
+```
 
 ## Troubleshooting
 
