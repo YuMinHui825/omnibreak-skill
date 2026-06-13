@@ -1,6 +1,6 @@
 {
   "name": "omnibreak-skill",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "AI writes the code. OmniBreak makes it work. Give your vibe coder a debugger — deploy, break, fix, loop on real Linux hardware.",
   "bin": {
     "omnibreak": "./out/cli.js"
