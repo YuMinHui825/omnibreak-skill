@@ -31,7 +31,8 @@ function daemonCall(cmd, data) {
     });
 }
 const prog = new commander_1.Command();
-prog.name('omnibreak').description('Remote Linux debugger CLI').version('0.1.0');
+const pkg = require('../package.json');
+prog.name('omnibreak').description('Remote Linux debugger CLI').version(pkg.version);
 // Daemon management
 prog.command('daemon').description('Start the session daemon (run in background: omnibreak daemon &)')
     .action(() => { require('./daemon'); });
