@@ -13,7 +13,7 @@ describe('Multi-Session', () => {
   });
 
   it('creates session and auto-selects for debug', () => {
-    let r = cli(`launch --target ${T.host} --binary ${B.multithread} --user ${T.user} --pwd ${T.password} --sudo`);
+    let r = cli(`launch --target ${T.host} --binary ${B.multithread} --user ${T.user} --pwd ${T.password}`);
     expect(r.ok).toBe(true);
     r = cli('break --file multithread.c --line 17');
     expect(r.ok).toBe(true);
@@ -24,7 +24,7 @@ describe('Multi-Session', () => {
   });
 
   it('stop all removes all sessions', () => {
-    cli(`launch --target ${T.host} --binary ${B.multithread} --user ${T.user} --pwd ${T.password} --sudo`);
+    cli(`launch --target ${T.host} --binary ${B.multithread} --user ${T.user} --pwd ${T.password}`);
     const r = cli('stop');
     expect(r.ok).toBe(true);
     const h = cli('health');

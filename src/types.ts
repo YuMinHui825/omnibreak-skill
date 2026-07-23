@@ -30,12 +30,14 @@ export interface CliOutput {
   vars?: VarInfo[];
   result?: string;
   breakpoints?: BreakpointInfo[];
+  context?: SourceLine[];
 }
 
 export interface ThreadInfo { id: number; name: string; state: string }
 export interface FrameInfo { level: number; func: string; file: string; line: number }
 export interface VarInfo { name: string; value: string }
 export interface BreakpointInfo { id: number; file: string; line: number; verified: boolean }
+export interface SourceLine { line: number; code: string; isTarget: boolean }
 
 /** Session state stored in /tmp/omnibreak-session.json */
 export interface SessionState {
@@ -65,6 +67,25 @@ export interface TraceCaptureResult {
   remoteHost: string;
   durationSec: number;
   summary?: Record<string, any>;
+  narrative?: string;
+}
+
+/** Stats snapshot for diff comparison */
+export interface StatsSnapshot {
+  timestamp: number;
+  cpuPercent: number;
+  rssMB: number;
+  vszMB: number;
+  threadCount: number;
+  state: string;
+}
+
+/** Diff between two stats snapshots */
+export interface DiffResult {
+  elapsedMs: number;
+  before: StatsSnapshot;
+  after: StatsSnapshot;
+  delta: { cpuPercent: number; rssMB: number; vszMB: number; threadCount: number };
 }
 
 /** Leak report */

@@ -62,29 +62,51 @@ function getTransport(data) {
     const cfg = (0, transport_1.parseTarget)(data.target || 'local', data.user || 'root', data.pwd, sshPort);
     return (0, transport_1.createTransport)(cfg);
 }
+async function waitForPort(t, port, timeoutMs) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const out = await t.exec(`ss -tlnp 2>/dev/null | grep ':${port}' || netstat -tlnp 2>/dev/null | grep ':${port}' || echo ''`);
+            if (out.trim())
+                return;
+        }
+        catch { }
+        await new Promise(r => setTimeout(r, 200));
+    }
+}
 async function handleLaunch(body) {
     const t = getTransport(body);
     const port = body.port || 2345;
     if (body.deploySource) {
         (0, types_1.log)('info', `Deploying ${body.deploySource} → ${body.target}:${body.binary}`);
-        t.deployFile(body.deploySource, body.binary);
+        await t.deployFile(body.deploySource, body.binary);
     }
-    // Start gdbserver — different commands for local vs remote
+    // Start gdbserver — kill only our own port, not all gdbservers
     const isLocal = body.target === 'local';
     const sudo = body.sudo ? 'sudo ' : '';
     try {
-        t.exec(`${sudo}pkill -x gdbserver 2>/dev/null || true`);
+        await t.exec(`${sudo}fuser -k ${port}/tcp 2>/dev/null || true`);
     }
     catch { }
+    // Build sanitizer env vars
+    const sanitizeEnv = [];
+    if (body.asan)
+        sanitizeEnv.push('ASAN_OPTIONS=halt_on_error=0:abort_on_error=1:log_path=/tmp/omnibreak_asan');
+    if (body.ubsan)
+        sanitizeEnv.push('UBSAN_OPTIONS=halt_on_error=0:print_stacktrace=1:log_path=/tmp/omnibreak_ubsan');
+    if (body.tsan)
+        sanitizeEnv.push('TSAN_OPTIONS=halt_on_error=0:history_size=7:log_path=/tmp/omnibreak_tsan');
+    const sanEnv = sanitizeEnv.length > 0 ? sanitizeEnv.join(' ') + ' ' : '';
     if (!body.skipGdbserver) {
         if (isLocal) {
-            // Local: simple background gdbserver, no setsid needed
-            t.exec(`${sudo}gdbserver --multi :${port} &`);
+            await t.exec(`rm -f /tmp/omnibreak_output.log; ${sanEnv}nohup ${sudo}gdbserver --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
         }
         else {
-            t.exec(`rm -f /tmp/omnibreak_output.log; setsid stdbuf -o0 ${sudo}gdbserver --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
+            // env vars go before setsid+stdbuf, not between stdbuf and gdbserver
+            await t.exec(`rm -f /tmp/omnibreak_output.log; ${sanEnv}setsid stdbuf -o0 ${sudo}gdbserver --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
         }
-        await new Promise(r => setTimeout(r, 1500));
+        // Poll for port readiness instead of fixed 1.5s sleep
+        await waitForPort(t, port, 5000);
     }
     // GDB still uses SSH for remote targets; local targets spawn GDB directly
     const id = String(++sessionCounter);
@@ -98,7 +120,7 @@ async function handleLaunch(body) {
     await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
     await gdb.sendCommand(`-interpreter-exec console "set remote exec-file ${body.binary}"`);
     await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
-    const session = { id, gdb, mapper, firstContinue: true, target: body.target, binary: body.binary };
+    const session = { id, gdb, mapper, firstContinue: true, target: body.target, binary: body.binary, transport: t };
     sessions.set(id, session);
     lastId = id;
     await new Promise(resolve => {
@@ -114,25 +136,26 @@ async function handleAttach(body) {
     const port = body.port || 2345;
     let pid = String(body.pid || '');
     if (!pid && body.processName) {
-        pid = t.exec(`pgrep -f '${esc(body.processName)}' | head -1`).trim();
+        pid = (await t.exec(`pgrep -f '${esc(body.processName)}' | head -1`)).trim();
     }
     if (!pid)
         return fail('Process not found', 'SESSION');
     if (body.deploySource)
-        t.deployFile(body.deploySource, body.binary);
+        await t.deployFile(body.deploySource, body.binary);
     const isLocal = body.target === 'local';
     const sudo = body.sudo ? 'sudo ' : '';
     try {
-        t.exec(`${sudo}pkill -x gdbserver 2>/dev/null || true`);
+        await t.exec(`${sudo}fuser -k ${port}/tcp 2>/dev/null || true`);
     }
     catch { }
     if (isLocal) {
-        t.exec(`${sudo}gdbserver --attach :${port} ${pid} &`);
+        await t.exec(`${sudo}gdbserver --attach :${port} ${pid} &`);
     }
     else {
-        t.exec(`setsid stdbuf -o0 ${sudo}gdbserver --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &`);
+        await t.exec(`setsid stdbuf -o0 ${sudo}gdbserver --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &`);
     }
-    await new Promise(r => setTimeout(r, 1500));
+    // Poll for port readiness instead of fixed sleep
+    await waitForPort(t, port, 5000);
     const id = String(++sessionCounter);
     const mapper = new sourceMapper_1.SourceMapper(body.sourceMap || {});
     const gdb = new gdbMiClient_1.GdbMiClient({
@@ -145,7 +168,7 @@ async function handleAttach(body) {
     if (body.binary)
         await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
     await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
-    const session = { id, gdb, mapper, firstContinue: false, target: body.target, binary: body.binary || '' };
+    const session = { id, gdb, mapper, firstContinue: false, target: body.target, binary: body.binary || '', transport: t };
     sessions.set(id, session);
     lastId = id;
     return await handleStatusById(session);
@@ -242,6 +265,35 @@ async function handleWatch(sid, expr, type) {
         return fail(`Watchpoint failed: ${e.message}`);
     }
 }
+/** Read N lines of source context around a target line. Tries local fs first, falls back to remote. */
+async function readSourceContext(file, line, n = 5, t) {
+    // Try local file first
+    try {
+        const content = require('fs').readFileSync(file, 'utf8');
+        return parseContext(content, file, line, n);
+    }
+    catch { }
+    // Fall back to remote via transport
+    if (t && t.execSafe && file) {
+        try {
+            const content = await t.execSafe(`cat '${file.replace(/'/g, "'\\''")}' 2>/dev/null || echo ''`);
+            if (content.trim())
+                return parseContext(content, file, line, n);
+        }
+        catch { }
+    }
+    return [];
+}
+function parseContext(content, _file, line, n) {
+    const lines = content.split('\n');
+    const start = Math.max(1, line - n);
+    const end = Math.min(lines.length, line + n);
+    const result = [];
+    for (let i = start; i <= end; i++) {
+        result.push({ line: i, code: lines[i - 1] || '', isTarget: i === line });
+    }
+    return result;
+}
 async function handleStatusById(s) {
     try {
         const out = { ok: true, status: 'stopped' };
@@ -263,6 +315,7 @@ async function handleStatusById(s) {
             if (finfo.length > 0) {
                 out.file = finfo[0].file;
                 out.line = finfo[0].line;
+                out.context = await readSourceContext(finfo[0].file, finfo[0].line, 5, s.transport);
             }
         }
         catch { }
@@ -297,7 +350,10 @@ async function handleCrash(sid) {
         file: s.mapper.compileToLocal(f['fullname'] || f['file'] || ''),
         line: parseInt(f['line'] || '0')
     }));
-    return ok({ status: 'stopped', reason: 'signal-received', frames: finfo });
+    const top = finfo[0];
+    return ok({ status: 'stopped', reason: 'signal-received', frames: finfo,
+        file: top?.file, line: top?.line,
+        context: top ? await readSourceContext(top.file, top.line, 5, s.transport) : undefined });
 }
 async function handleEval(sid, expr) {
     const s = requireSession(sid);
@@ -318,7 +374,7 @@ async function handleLogs(data) {
         return fail('Log path required', 'SESSION');
     try {
         const lines = data.tail ? 50 : (parseInt(data.lines) || 100);
-        const out = t.exec(`tail -n ${lines} '${esc(path)}' 2>/dev/null || echo LOG_NOT_FOUND`);
+        const out = await t.exec(`tail -n ${lines} '${esc(path)}' 2>/dev/null || echo LOG_NOT_FOUND`);
         if (out.includes('LOG_NOT_FOUND'))
             return fail(`Log file not found: ${path}`);
         const logLines = out.trim().split('\n');
@@ -363,7 +419,7 @@ async function handleStats(data) {
     if (!pid)
         return fail('PID required', 'SESSION');
     try {
-        const out = t.exec(`ps -p ${pid} -o %cpu=,rss=,vsz=,nlwp=,stat= --no-headers 2>/dev/null || echo '0 0 0 0 ?'`).trim();
+        const out = (await t.exec(`ps -p ${pid} -o %cpu=,rss=,vsz=,nlwp=,stat= --no-headers 2>/dev/null || echo '0 0 0 0 ?'`)).trim();
         const vals = out.split(/\s+/);
         const rssKB = parseInt(vals[1]) || 0;
         const result = {
@@ -385,8 +441,8 @@ async function handleLeaks(data) {
     if (!pid)
         return fail('PID required', 'SESSION');
     try {
-        const smaps = t.exec(`cat /proc/${pid}/smaps 2>/dev/null`);
-        const status = t.exec(`grep -E '^(Vm|Rss)' /proc/${pid}/status 2>/dev/null`);
+        const smaps = await t.exec(`cat /proc/${pid}/smaps 2>/dev/null`);
+        const status = await t.exec(`grep -E '^(Vm|Rss)' /proc/${pid}/status 2>/dev/null`);
         const st = {};
         status.split('\n').forEach(line => {
             const m = line.match(/^(\w+):\s+(\d+)/);
@@ -415,7 +471,7 @@ async function handleLeaks(data) {
         const sampleFile = `/tmp/omnibreak-leak-${pid}.json`;
         let samples = [];
         try {
-            samples = JSON.parse(t.exec(`cat ${sampleFile} 2>/dev/null || echo '[]'`).trim());
+            samples = JSON.parse((await t.exec(`cat ${sampleFile} 2>/dev/null || echo '[]'`)).trim());
         }
         catch { }
         if (!Array.isArray(samples))
@@ -423,7 +479,7 @@ async function handleLeaks(data) {
         samples.push(heapKB);
         if (samples.length > 60)
             samples = samples.slice(-60);
-        t.exec(`printf '%s' '${JSON.stringify(samples).replace(/'/g, "'\\''")}' > ${sampleFile}`);
+        await t.exec(`printf '%s' '${JSON.stringify(samples).replace(/'/g, "'\\''")}' > ${sampleFile}`);
         let risk = 'none';
         if (samples.length >= 10) {
             const n = samples.length;
@@ -453,6 +509,257 @@ async function handleLeaks(data) {
     catch (e) {
         return fail(`Leak scan failed: ${e.message}`);
     }
+}
+async function takeSnapshot(t, pid) {
+    const out = (await t.exec(`ps -p ${pid} -o %cpu=,rss=,vsz=,nlwp=,stat= --no-headers 2>/dev/null || echo '0 0 0 0 ?'`)).trim();
+    const vals = out.split(/\s+/);
+    const rssKB = parseInt(vals[1]) || 0;
+    return {
+        timestamp: Date.now(),
+        cpuPercent: parseFloat(vals[0]) || 0,
+        rssMB: Math.round(rssKB / 1024 * 10) / 10,
+        vszMB: Math.round((parseInt(vals[2]) || 0) / 1024),
+        threadCount: parseInt(vals[3]) || 0,
+        state: vals[4] || '?',
+    };
+}
+function parseSanitizerOutput(log) {
+    const findings = [];
+    const lines = log.split('\n');
+    let current = null;
+    let tool = '';
+    for (const l of lines) {
+        // Detect sanitizer type
+        if (l.includes('AddressSanitizer') || l.includes('LeakSanitizer'))
+            tool = 'asan';
+        else if (l.includes('UndefinedBehaviorSanitizer'))
+            tool = 'ubsan';
+        else if (l.includes('ThreadSanitizer'))
+            tool = 'tsan';
+        // Start of error
+        const errMatch = l.match(/==\d+==(ERROR|WARNING):\s*(.+)/);
+        if (errMatch) {
+            if (current)
+                findings.push(current);
+            current = { type: errMatch[1], tool, message: errMatch[2], frames: [] };
+            continue;
+        }
+        // Stack frame
+        const frameMatch = l.match(/^\s*#(\d+)\s+0x[0-9a-f]+\s+in\s+(\S+)\s*(.+)?/);
+        if (frameMatch && current) {
+            const loc = (frameMatch[3] || '').trim();
+            const fileMatch = loc.match(/(.+):(\d+)/);
+            if (fileMatch && !current.file) {
+                current.file = fileMatch[1];
+                current.line = parseInt(fileMatch[2]);
+                current.func = frameMatch[2];
+            }
+            current.frames.push(`${frameMatch[2]} ${loc}`.trim());
+            continue;
+        }
+        // Summary line with location
+        if (current && !current.file) {
+            const sm = l.match(/SUMMARY:.*in\s+(\S+)\s+(.+):(\d+)/);
+            if (sm) {
+                current.func = sm[1];
+                current.file = sm[2];
+                current.line = parseInt(sm[3]);
+            }
+        }
+    }
+    if (current)
+        findings.push(current);
+    return findings;
+}
+async function handleSanitize(data) {
+    const sid = data.session;
+    // Read remote gdbserver output log + any sanitizer log files
+    try {
+        let log = '';
+        if (data.target) {
+            const rt = getTransport(data);
+            log = await rt.exec('cat /tmp/omnibreak_output.log 2>/dev/null || echo ""');
+            // Also read ASan/UBSan/TSan log files
+            for (const prefix of ['omnibreak_asan', 'omnibreak_ubsan', 'omnibreak_tsan']) {
+                try {
+                    log += '\n' + await rt.exec(`cat /tmp/${prefix}.* 2>/dev/null || echo ""`);
+                }
+                catch { }
+            }
+        }
+        else if (sid) {
+            const s = getSession(sid);
+            if (s && s.transport && s.transport.exec) {
+                log = await s.transport.exec('cat /tmp/omnibreak_output.log 2>/dev/null || echo ""');
+                for (const prefix of ['omnibreak_asan', 'omnibreak_ubsan', 'omnibreak_tsan']) {
+                    try {
+                        log += '\n' + await s.transport.exec(`cat /tmp/${prefix}.* 2>/dev/null || echo ""`);
+                    }
+                    catch { }
+                }
+            }
+        }
+        if (!log.trim())
+            return ok({ result: JSON.stringify({ findings: [], hint: 'No sanitizer output found. Compile with -fsanitize=address,undefined,thread and re-run.' }) });
+        const findings = parseSanitizerOutput(log);
+        return ok({ result: JSON.stringify({ findings, count: findings.length }) });
+    }
+    catch (e) {
+        return fail(`Sanitizer check failed: ${e.message}`);
+    }
+}
+async function handleDiff(data) {
+    const t = getTransport(data);
+    const pid = parseInt(data.pid) || 0;
+    if (!pid)
+        return fail('PID required', 'SESSION');
+    try {
+        const before = await takeSnapshot(t, pid);
+        const waitMs = parseInt(data.wait) || 5000;
+        await new Promise(r => setTimeout(r, waitMs));
+        const after = await takeSnapshot(t, pid);
+        const result = {
+            elapsedMs: waitMs,
+            before, after,
+            delta: {
+                cpuPercent: Math.round((after.cpuPercent - before.cpuPercent) * 10) / 10,
+                rssMB: Math.round((after.rssMB - before.rssMB) * 10) / 10,
+                vszMB: after.vszMB - before.vszMB,
+                threadCount: after.threadCount - before.threadCount,
+            },
+        };
+        return ok({ result: JSON.stringify(result) });
+    }
+    catch (e) {
+        return fail(`Diff failed: ${e.message}`);
+    }
+}
+async function handleReport(data) {
+    const sid = data.session;
+    const s = getSession(sid);
+    if (!s)
+        return fail('No active session. Use launch or attach first.', 'SESSION');
+    let status = { ok: true };
+    try {
+        status = await handleStatusById(s);
+    }
+    catch { }
+    // Gather metrics if target is remote
+    let statsBefore = null, leaksResult = null;
+    if (s.transport && s.target !== 'local') {
+        try {
+            // Try to get process stats (use ps to find the binary)
+            const pgrep = await s.transport.exec(`pgrep -f '${s.binary.replace(/'/g, "'\\''")}' 2>/dev/null | head -1 || echo '0'`);
+            const pid = parseInt(pgrep.trim());
+            if (pid > 0) {
+                const statsOut = await s.transport.exec(`ps -p ${pid} -o %cpu=,rss=,vsz=,nlwp=,stat= --no-headers 2>/dev/null || echo '0 0 0 0 ?'`);
+                const v = statsOut.trim().split(/\s+/);
+                statsBefore = {
+                    cpuPercent: parseFloat(v[0]) || 0,
+                    rssMB: Math.round((parseInt(v[1]) || 0) / 1024 * 10) / 10,
+                    vszMB: Math.round((parseInt(v[2]) || 0) / 1024),
+                    threadCount: parseInt(v[3]) || 0,
+                    state: v[4] || '?',
+                };
+                // Also check for leaks
+                try {
+                    const leakOut = await s.transport.exec(`cat /tmp/omnibreak-leak-${pid}.json 2>/dev/null || echo '[]'`);
+                    const samples = JSON.parse(leakOut.trim() || '[]');
+                    if (Array.isArray(samples) && samples.length > 1) {
+                        const last = samples[samples.length - 1];
+                        const first = samples[0];
+                        leaksResult = {
+                            heapKBLatest: last / 1024,
+                            heapDeltaMB: Math.round((last - first) / 1024 * 10) / 10,
+                            sampleCount: samples.length,
+                            risk: last > first * 1.5 ? 'high' : last > first * 1.2 ? 'medium' : last > first ? 'low' : 'none',
+                        };
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+    const report = {
+        generatedAt: new Date().toISOString(),
+        session: { id: s.id, target: s.target, binary: s.binary },
+        crash: {
+            file: status.file, line: status.line,
+            frames: (status.frames || []).slice(0, 5),
+            context: status.context,
+        },
+        stats: statsBefore,
+        leaks: leaksResult,
+        vars: status.vars,
+        diagnostics: {
+            sanitizer: null,
+        },
+    };
+    // Try to get sanitizer findings
+    try {
+        if (s.transport && s.transport.execSafe && s.target !== 'local') {
+            const sanLog = await s.transport.execSafe('cat /tmp/omnibreak_output.log 2>/dev/null || echo ""');
+            if (sanLog.includes('Sanitizer') || sanLog.includes('ERROR')) {
+                report.diagnostics.sanitizer = parseSanitizerOutput(sanLog);
+            }
+        }
+    }
+    catch { }
+    // Generate markdown report
+    const md = formatDiagnosticReport(report);
+    return ok({ result: JSON.stringify({ ...report, markdown: md }) });
+}
+function formatDiagnosticReport(r) {
+    const lines = [
+        '=== OmniBreak Diagnostic Report ===',
+        `Generated: ${r.generatedAt}`,
+        `Target: ${r.session.target} | Binary: ${r.session.binary} | Session: ${r.session.id}`,
+        '',
+    ];
+    if (r.crash.file) {
+        lines.push(`**Crash Location:** ${r.crash.file}:${r.crash.line}`);
+        lines.push('');
+        if (r.crash.frames && r.crash.frames.length > 0) {
+            lines.push('**Backtrace:**');
+            r.crash.frames.forEach((f) => lines.push(`  #${f.level} ${f.func} at ${f.file}:${f.line}`));
+            lines.push('');
+        }
+        if (r.crash.context && r.crash.context.length > 0) {
+            lines.push('**Source Context:**');
+            lines.push('```c');
+            r.crash.context.forEach((l) => lines.push(`${l.isTarget ? '> ' : '  '}${l.line}: ${l.code}`));
+            lines.push('```');
+            lines.push('');
+        }
+    }
+    if (r.vars && r.vars.length > 0) {
+        lines.push('**Variables:**');
+        r.vars.forEach((v) => lines.push(`  ${v.name} = ${v.value}`));
+        lines.push('');
+    }
+    if (r.stats) {
+        lines.push(`**Process Stats:** CPU ${r.stats.cpuPercent}% | RSS ${r.stats.rssMB}MB | VSZ ${r.stats.vszMB}MB | Threads ${r.stats.threadCount} | State ${r.stats.state}`);
+        lines.push('');
+    }
+    if (r.leaks) {
+        lines.push(`**Memory Leak:** ${r.leaks.risk.toUpperCase()} risk | Heap ${r.leaks.heapKBLatest}KB | Delta ${r.leaks.heapDeltaMB}MB over ${r.leaks.sampleCount} samples`);
+        lines.push('');
+    }
+    if (r.diagnostics.sanitizer && r.diagnostics.sanitizer.length > 0) {
+        lines.push('**Sanitizer Findings:**');
+        r.diagnostics.sanitizer.forEach((f) => {
+            lines.push(`  [${f.tool.toUpperCase()}] ${f.type}: ${f.message}`);
+            if (f.file)
+                lines.push(`    at ${f.func} (${f.file}:${f.line})`);
+        });
+        lines.push('');
+    }
+    lines.push('**Status:** 🐛 Needs Investigation');
+    lines.push('');
+    lines.push('---');
+    lines.push('Generated by OmniBreak Skill — AI writes the code. OmniBreak makes it work.');
+    return lines.join('\n');
 }
 // ═══ HTTP SERVER ═══
 if (require.main === module) {
@@ -516,6 +823,15 @@ if (require.main === module) {
                         break;
                     case 'trace-capture':
                         result = await handleTraceCapture(data);
+                        break;
+                    case 'diff':
+                        result = await handleDiff(data);
+                        break;
+                    case 'sanitize':
+                        result = await handleSanitize(data);
+                        break;
+                    case 'report':
+                        result = await handleReport(data);
                         break;
                     case 'health':
                         result = ok({ result: `daemon running, ${sessions.size} session(s) active` });

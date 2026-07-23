@@ -33,7 +33,15 @@ prog.name('omnibreak').description('Remote Linux debugger CLI').version(pkg.vers
 
 // Daemon management
 prog.command('daemon').description('Start the session daemon (run in background: omnibreak daemon &)')
-  .action(() => { require('./daemon'); });
+  .action(() => {
+    const { spawn } = require('child_process');
+    const daemonPath = require('path').join(__dirname, 'daemon.js');
+    const child = spawn(process.execPath, [daemonPath], {
+      detached: true, stdio: 'ignore',
+    });
+    child.unref();
+    console.log(JSON.stringify({ ok: true, result: `Daemon started (PID ${child.pid})` }));
+  });
 
 // Debug commands (all via daemon)
 prog.command('launch').description('Start a debug session')
@@ -45,6 +53,9 @@ prog.command('launch').description('Start a debug session')
   .option('--source-map <json>', 'Source path mapping')
   .option('--deploy-source <path>', 'Local binary to SCP')
   .option('--sudo', 'Use sudo for gdbserver commands')
+  .option('--asan', 'Enable AddressSanitizer')
+  .option('--ubsan', 'Enable UndefinedBehaviorSanitizer')
+  .option('--tsan', 'Enable ThreadSanitizer')
   .option('--skip-gdbserver', 'Skip starting gdbserver (already running)')
   .action(o => daemonCall('launch', { ...o, line: undefined }).then(jsonLog));
 
@@ -113,6 +124,33 @@ prog.command('leaks').description('Memory leak detection')
   .option('--user <name>', 'SSH user', 'root')
   .option('--pwd <pass>', 'SSH password')
   .action(o => daemonCall('leaks', o).then(jsonLog));
+prog.command('report').description('Generate diagnostic report from active session')
+  .option('--session <id>', 'Session ID')
+  .option('--save <path>', 'Save markdown report to file')
+  .action(o => daemonCall('report', o).then(r => {
+    if (o.save && r.ok) {
+      try {
+        const data = JSON.parse(r.result);
+        if (data.markdown) require('fs').writeFileSync(o.save, data.markdown);
+      } catch (e: any) {
+        r = { ok: false, error: `Failed to save report: ${e.message}` };
+      }
+    }
+    jsonLog(r);
+  }));
+prog.command('sanitize').description('Parse sanitizer (ASan/UBSan/TSan) output from target')
+  .requiredOption('--target <host>', 'Target Linux IP')
+  .option('--user <name>', 'SSH user', 'root')
+  .option('--pwd <pass>', 'SSH password')
+  .option('--session <id>', 'Session ID (uses session target if available)')
+  .action(o => daemonCall('sanitize', o).then(jsonLog));
+prog.command('diff').description('Compare process metrics over time (before/after fix)')
+  .requiredOption('--pid <n>', 'Process ID')
+  .requiredOption('--target <host>', 'Target Linux IP')
+  .option('--user <name>', 'SSH user', 'root')
+  .option('--pwd <pass>', 'SSH password')
+  .option('--wait <ms>', 'Interval between snapshots (ms)', '5000')
+  .action(o => daemonCall('diff', o).then(jsonLog));
 prog.command('trace').description('Capture Perfetto trace from remote target')
   .requiredOption('--target <host>', 'Target Linux IP')
   .option('--user <name>', 'SSH user', 'root')

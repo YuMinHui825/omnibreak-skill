@@ -157,8 +157,11 @@ omnibreak stop
 | `watch` | 设监视点（`--expr`、`--type read/write/access`） |
 | `stats` | 进程统计 — CPU%、RSS、VSZ、线程数、状态 |
 | `leaks` | 内存泄漏检测 — 堆内存追踪，风险等级评估 |
+| `diff` | 进程指标对比 — 修复前后 CPU/内存差异（`--pid`、`--wait`） |
+| `sanitize` | 解析 ASan/UBSan/TSan 输出，定位内存错误、未定义行为、数据竞争 |
+| `report` | 生成诊断报告 — 崩溃上下文 + 进程状态 + 泄漏信息 |
 | `logs` | 读取远程日志文件（`--path`、`--lines`） |
-| `trace` | 采集 Perfetto 系统级 trace（CPU 采样 + 自动摘要） |
+| `trace` | 采集 Perfetto 系统级 trace（CPU 火焰图 + 堆剖析 + AI 摘要） |
 | `coredump` | 本地 GDB 分析 core dump（无需 daemon） |
 | `deploy` | SCP 文件到目标机（独立命令，无需 session） |
 | `stop` | 结束会话并清理 |
@@ -174,6 +177,9 @@ omnibreak launch --target <IP|local|docker://<容器>> --binary <PATH>
   --deploy-source <path> 本地二进制，启动前自动 SCP
   --source-map <json>    编译路径 → 本地路径映射
   --sudo                 使用 sudo 执行 gdbserver 命令
+  --asan                 启用 AddressSanitizer（ASan）
+  --ubsan                启用 UndefinedBehaviorSanitizer（UBSan）
+  --tsan                 启用 ThreadSanitizer（TSan）
   --skip-gdbserver       跳过 gdbserver 启动（已运行时）
 ```
 
@@ -219,7 +225,20 @@ summary:
 
 **GPU 自动检测**：探 `/sys/kernel/tracing/events/` 中的 GPU ftrace 源。  
 **CPU 采样**：100Hz `linux.perf` 数据源生成火焰图。  
+**AI 自然语言摘要**：trace 结果包含 `narrative` 字段 — CPU 热点、线程状态、IO 阻塞、内存峰值以自然语言呈现。  
 **安全**：密码通过 `SSHPASS` 环境变量传递，不出现在 `ps` 输出中。
+
+### Diff 选项
+
+```
+omnibreak diff --target <IP> --pid <N>
+  --user <name>        SSH 用户（默认 root）
+  --pwd <pass>         SSH 密码
+  --wait <ms>          快照间隔（默认 5000ms）
+```
+
+返回两次 `StatsSnapshot` 和 `delta`，包含 CPU%、RSS、VSZ、线程数差异。  
+适用于 Agent 自主 loop 中量化修复效果。
 
 ## JSON 输出
 
@@ -235,7 +254,12 @@ summary:
   "reason": "breakpoint-hit",
   "threads": [{"id":1,"name":"myapp","state":"stopped"}],
   "frames": [{"level":0,"func":"main","file":"main.c","line":42}],
-  "vars": [{"name":"x","value":"10"},{"name":"y","value":"20"}]
+  "vars": [{"name":"x","value":"10"},{"name":"y","value":"20"}],
+  "context": [
+    {"line":37,"code":"void parse(char *buf) {","isTarget":false},
+    {"line":42,"code":"    p++;","isTarget":true},
+    {"line":44,"code":"}","isTarget":false}
+  ]
 }
 ```
 
@@ -330,6 +354,41 @@ omnibreak watch --expr "ptr->data" --type access
 # 继续执行 — x 变化时自动停下来，返回新值
 omnibreak continue
 # → {"ok":true,"status":"stopped","file":"main.c","line":42,"vars":[{"name":"x","value":"100"}]}
+```
+
+### Sanitizer 检查
+
+```bash
+# 启用 ASan 启动（需用 -fsanitize=address 编译二进制）
+omnibreak launch --target 192.168.1.100 --binary /app/myapp --user root --asan
+
+# 程序触发 sanitizer 错误后，解析输出
+omnibreak sanitize --target 192.168.1.100 --user root
+# → {findings: [{tool:"asan", type:"ERROR", message:"heap-buffer-overflow",
+#     file:"main.c", line:42, func:"parse_config", frames:[...]}]}
+```
+
+### 诊断报告
+
+```bash
+# 从当前调试会话生成诊断报告
+omnibreak report --session 1
+# → markdown 报告：崩溃位置、调用栈、源码上下文、变量、进程状态、泄漏、sanitizer 发现
+
+# 保存到文件
+omnibreak report --session 1 --save ./debug-report.md
+```
+
+### 修复前后对比 (diff)
+
+```bash
+# 对比进程 5 秒内的指标变化
+omnibreak diff --pid 12345 --target 192.168.1.100 --user root --wait 5000
+# → {before:{cpuPercent:95.2,rssMB:512}, after:{cpuPercent:12.3,rssMB:48},
+#    delta:{cpuPercent:-82.9,rssMB:-464}, elapsedMs:5000}
+
+# Agent 自主 loop 中：修复前采一次，修复后采一次，量化改善
+omnibreak diff --pid 12345 --target 192.168.1.100 --wait 10000
 ```
 
 ### 远程日志查看

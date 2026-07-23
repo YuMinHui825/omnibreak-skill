@@ -158,8 +158,11 @@ omnibreak stop
 | `watch` | Set watchpoint (`--expr`, `--type read/write/access`) |
 | `stats` | Process stats — CPU%, RSS, VSZ, thread count, state |
 | `leaks` | Memory leak detection — heap tracking, risk escalation |
+| `diff` | Compare process metrics — before/after fix delta (`--pid`, `--wait`) |
+| `sanitize` | Parse ASan/UBSan/TSan output for memory errors, UB, data races |
+| `report` | Generate diagnostic report with crash context + stats + leak info |
 | `logs` | Read remote log file (`--path`, `--lines`) |
-| `trace` | Capture Perfetto trace from remote target (system-wide + CPU sampling + auto-summary) |
+| `trace` | Capture Perfetto trace (CPU flame graph + heap profiling + AI narrative) |
 | `coredump` | Analyze core dump locally with GDB (no daemon needed) |
 | `deploy` | SCP file to target (standalone, no session needed) |
 | `stop` | End session & cleanup |
@@ -175,6 +178,9 @@ omnibreak launch --target <IP|local|docker://<ctr>> --binary <PATH>
   --deploy-source <path> Local binary to SCP before launch
   --source-map <json>    Compile-path → local-path mapping
   --sudo                 Use sudo for gdbserver commands
+  --asan                 Enable AddressSanitizer (ASan)
+  --ubsan                Enable UndefinedBehaviorSanitizer (UBSan)
+  --tsan                 Enable ThreadSanitizer (TSan)
   --skip-gdbserver       Skip starting gdbserver (if already running)
 ```
 
@@ -220,7 +226,20 @@ summary:
 
 **GPU auto-detection:** probes `/sys/kernel/tracing/events/` for GPU ftrace sources.  
 **CPU sampling:** 100Hz `linux.perf` data source for flame graphs.  
+**AI narrative:** trace result includes a human-readable `narrative` field — CPU hotspots, thread states, IO bottlenecks, memory peaks in plain text.  
 **Security:** passwords passed via `SSHPASS` env variable, never in `ps` output.
+
+### Diff Options
+
+```
+omnibreak diff --target <IP> --pid <N>
+  --user <name>        SSH user (default: root)
+  --pwd <pass>         SSH password
+  --wait <ms>          Interval between snapshots (default: 5000)
+```
+
+Returns two `StatsSnapshot`s and a `delta` with CPU%, RSS, VSZ, and thread count differences.  
+Useful for quantifying improvement after a fix in agent loops.
 
 ## JSON Output
 
@@ -236,7 +255,17 @@ Success:
   "reason": "breakpoint-hit",
   "threads": [{"id":1,"name":"myapp","state":"stopped"}],
   "frames": [{"level":0,"func":"main","file":"main.c","line":42}],
-  "vars": [{"name":"x","value":"10"},{"name":"y","value":"20"}]
+  "vars": [{"name":"x","value":"10"},{"name":"y","value":"20"}],
+  "context": [
+    {"line":37,"code":"void parse(char *buf) {","isTarget":false},
+    {"line":38,"code":"  char *p = buf;","isTarget":false},
+    {"line":39,"code":"  while (*p) {","isTarget":false},
+    {"line":40,"code":"    if (*p == ',') *p = '\\0';","isTarget":false},
+    {"line":41,"code":"    tokenize(p + 1);","isTarget":false},
+    {"line":42,"code":"    p++;","isTarget":true},
+    {"line":43,"code":"  }","isTarget":false},
+    {"line":44,"code":"}","isTarget":false}
+  ]
 }
 ```
 
@@ -331,6 +360,42 @@ omnibreak watch --expr "ptr->data" --type access
 # Continue — stops when x changes, returns new value in vars
 omnibreak continue
 # → {"ok":true,"status":"stopped","file":"main.c","line":42,"vars":[{"name":"x","value":"100"}]}
+```
+
+### Sanitizer check
+
+```bash
+# Launch with ASan enabled (binary must be compiled with -fsanitize=address)
+omnibreak launch --target 192.168.1.100 --binary /app/myapp --user root --asan
+
+# After the program runs and triggers sanitizer errors, inspect
+omnibreak sanitize --target 192.168.1.100 --user root
+# → {findings: [{tool:"asan", type:"ERROR", message:"heap-buffer-overflow",
+#     file:"main.c", line:42, func:"parse_config", frames:[...]}]}
+```
+
+### Diagnostic report
+
+```bash
+# Generate a full diagnostic report from the active debug session
+omnibreak report --session 1
+# → markdown report with crash location, backtrace, source context,
+#   variables, process stats, leak status, sanitizer findings
+
+# Save report to file
+omnibreak report --session 1 --save ./debug-report.md
+```
+
+### Before/After comparison (diff)
+
+```bash
+# Compare process metrics over 5s interval
+omnibreak diff --pid 12345 --target 192.168.1.100 --user root --wait 5000
+# → {before:{cpuPercent:95.2,rssMB:512}, after:{cpuPercent:12.3,rssMB:48},
+#    delta:{cpuPercent:-82.9,rssMB:-464}, elapsedMs:5000}
+
+# For agent loops: capture before fix, after fix, verify improvement
+omnibreak diff --pid 12345 --target 192.168.1.100 --wait 10000
 ```
 
 ### Remote log inspection
