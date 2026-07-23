@@ -34,12 +34,12 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const http = __importStar(require("http"));
-const gdbMiClient_1 = require("./gdbMiClient");
-const gdbMiParser_1 = require("./gdbMiParser");
-const sourceMapper_1 = require("./sourceMapper");
-const types_1 = require("./types");
-const transport_1 = require("./transport");
-const trace_1 = require("./trace");
+const client_1 = require("../debug/client");
+const parser_1 = require("../debug/parser");
+const mapper_1 = require("../debug/mapper");
+const types_1 = require("../shared/types");
+const transport_1 = require("../transport/transport");
+const trace_1 = require("../trace/trace");
 const PORT = 49200;
 let sessionCounter = 0;
 const sessions = new Map();
@@ -110,8 +110,8 @@ async function handleLaunch(body) {
     }
     // GDB still uses SSH for remote targets; local targets spawn GDB directly
     const id = String(++sessionCounter);
-    const mapper = new sourceMapper_1.SourceMapper(body.sourceMap || {});
-    const gdb = new gdbMiClient_1.GdbMiClient({
+    const mapper = new mapper_1.SourceMapper(body.sourceMap || {});
+    const gdb = new client_1.GdbMiClient({
         gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch',
         sshRemote: body.target === 'local' ? undefined : { host: body.target, user: body.user || 'root', port: 22, password: body.pwd },
     });
@@ -157,8 +157,8 @@ async function handleAttach(body) {
     // Poll for port readiness instead of fixed sleep
     await waitForPort(t, port, 5000);
     const id = String(++sessionCounter);
-    const mapper = new sourceMapper_1.SourceMapper(body.sourceMap || {});
-    const gdb = new gdbMiClient_1.GdbMiClient({
+    const mapper = new mapper_1.SourceMapper(body.sourceMap || {});
+    const gdb = new client_1.GdbMiClient({
         gdbPath: body.gdbPath || '/usr/bin/gdb-multiarch',
         sshRemote: body.target === 'local' ? undefined : { host: body.target, user: body.user || 'root', port: 22, password: body.pwd },
     });
@@ -207,7 +207,7 @@ async function handleBreak(sid, file, line, condition) {
         const loc = `-f ${file}:${line}`;
         const cmd = condition ? `-break-insert ${loc} -c "${condition}"` : `-break-insert ${loc}`;
         const result = await s.gdb.sendCommand(cmd);
-        const info = (0, gdbMiParser_1.parseBreakpoint)(result.data);
+        const info = (0, parser_1.parseBreakpoint)(result.data);
         return ok({ breakpoints: [{ id: parseInt(info.number || '0'), file, line, verified: true }] });
     }
     catch (e) {
@@ -258,7 +258,7 @@ async function handleWatch(sid, expr, type) {
         else if (type === 'access')
             cmd += ' -a';
         const result = await s.gdb.sendCommand(`${cmd} ${expr}`);
-        const info = (0, gdbMiParser_1.parseBreakpoint)(result.data);
+        const info = (0, parser_1.parseBreakpoint)(result.data);
         return ok({ breakpoints: [{ id: parseInt(info.number || '0'), file: expr, line: 0, verified: true }] });
     }
     catch (e) {
@@ -298,7 +298,7 @@ async function handleStatusById(s) {
     try {
         const out = { ok: true, status: 'stopped' };
         const threads = await s.gdb.sendCommand('-thread-info');
-        const tinfo = (0, gdbMiParser_1.parseThreadInfo)(threads.data).map(t => ({
+        const tinfo = (0, parser_1.parseThreadInfo)(threads.data).map(t => ({
             id: parseInt(t.id), name: t.name, state: t.state
         }));
         out.threads = tinfo;
@@ -306,7 +306,7 @@ async function handleStatusById(s) {
             out.threadId = tinfo[0].id;
         try {
             const frames = await s.gdb.sendCommand('-stack-list-frames 0 20');
-            const finfo = (0, gdbMiParser_1.parseFrames)(frames.data).map(f => ({
+            const finfo = (0, parser_1.parseFrames)(frames.data).map(f => ({
                 level: parseInt(f['level'] || '0'), func: f['func'] || '??',
                 file: s.mapper.compileToLocal(f['fullname'] || f['file'] || ''),
                 line: parseInt(f['line'] || '0')
@@ -321,7 +321,7 @@ async function handleStatusById(s) {
         catch { }
         try {
             const vars = await s.gdb.sendCommand('-stack-list-variables --simple-values');
-            out.vars = (0, gdbMiParser_1.parseVariables)(vars.data).map(v => ({ name: v['name'] || '??', value: v['value'] || '' }));
+            out.vars = (0, parser_1.parseVariables)(vars.data).map(v => ({ name: v['name'] || '??', value: v['value'] || '' }));
         }
         catch { }
         return out;
@@ -345,7 +345,7 @@ async function handleStatus(sid) {
 async function handleCrash(sid) {
     const s = requireSession(sid);
     const frames = await s.gdb.sendCommand('-stack-list-frames 0 500');
-    const finfo = (0, gdbMiParser_1.parseFrames)(frames.data).map(f => ({
+    const finfo = (0, parser_1.parseFrames)(frames.data).map(f => ({
         level: parseInt(f['level'] || '0'), func: f['func'] || '??',
         file: s.mapper.compileToLocal(f['fullname'] || f['file'] || ''),
         line: parseInt(f['line'] || '0')

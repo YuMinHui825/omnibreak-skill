@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.GdbMiClient = void 0;
 const child_process_1 = require("child_process");
 const events_1 = require("events");
-const gdbMiParser_1 = require("./gdbMiParser");
+const parser_1 = require("./parser");
 class GdbMiClient extends events_1.EventEmitter {
     opts;
     process = null;
@@ -16,7 +16,7 @@ class GdbMiClient extends events_1.EventEmitter {
     constructor(opts) {
         super();
         this.opts = opts;
-        this.parser = new gdbMiParser_1.GdbMiParser();
+        this.parser = new parser_1.GdbMiParser();
         this.parser.onResult((r) => this.handleResult(r));
         this.parser.onRecord((r) => this.handleRecord(r));
     }

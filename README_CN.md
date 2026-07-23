@@ -69,7 +69,7 @@ npm install --production && npm link
 npm run test:unit
 
 # 集成测试（需要远程目标 + 运行中的 daemon）
-nohup node out/daemon.js > /dev/null 2>&1 &
+nohup node out/server/daemon.js > /dev/null 2>&1 &
 npm run test:integration      # daemon 自动管理生命周期
 
 # 全部测试

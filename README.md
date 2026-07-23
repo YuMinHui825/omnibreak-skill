@@ -69,7 +69,7 @@ Dev setup (only for contributors who modify TypeScript): `npm install && npm run
 npm run test:unit
 
 # Integration tests (requires remote target + running daemon)
-nohup node out/daemon.js > /dev/null 2>&1 &
+nohup node out/server/daemon.js > /dev/null 2>&1 &
 npm run test:integration      # daemon auto-managed
 
 # All tests
