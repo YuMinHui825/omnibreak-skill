@@ -1,6 +1,6 @@
 /** Integration tests for P0 optimizations against real remote target */
 import { REMOTE, BINARIES, cli } from '../setup';
-import { Transport, createTransport, parseTarget } from '../../src/transport';
+import { Transport, createTransport, parseTarget } from '../../src/transport/transport';
 
 const T = REMOTE;
 const B = BINARIES;

@@ -9,7 +9,7 @@
     "compile": "tsc",
     "watch": "tsc --watch",
     "start": "node out/cli.js",
-    "pretest:integration": "pkill -f 'node.*daemon' 2>/dev/null; sleep 0.5; nohup node out/daemon.js > /dev/null 2>&1 & sleep 2",
+    "pretest:integration": "pkill -f 'node.*daemon' 2>/dev/null; sleep 0.5; nohup node out/server/daemon.js > /dev/null 2>&1 & sleep 2",
     "test:integration": "jest --forceExit --detectOpenHandles test/integration",
     "posttest:integration": "pkill -f 'node.*daemon' 2>/dev/null || true",
     "test": "npm run test:unit && npm run test:integration",

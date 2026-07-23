@@ -1,7 +1,7 @@
 import { ChildProcess, spawn } from 'child_process';
 import { EventEmitter } from 'events';
-import { GdbMiParser } from './gdbMiParser';
-import { MiResult, MiAsyncRecord } from './types';
+import { GdbMiParser } from './parser';
+import { MiResult, MiAsyncRecord } from '../shared/types';
 
 export declare interface GdbMiClient {
   on(event: 'stopped', listener: (data: string) => void): this;

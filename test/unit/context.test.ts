@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { SourceLine } from '../../src/types';
+import { SourceLine } from '../../src/shared/types';
 
 function readSourceContext(file: string, line: number, n: number = 5): SourceLine[] {
   try {

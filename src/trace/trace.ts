@@ -2,8 +2,8 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { SshConfig, sshExec, sshExecSafe, scpDeploy } from './ssh';
-import { log, TraceCaptureResult } from './types';
+import { SshConfig, sshExec, sshExecSafe, scpDeploy } from '../shared/ssh';
+import { log, TraceCaptureResult } from '../shared/types';
 
 const REMOTE_TRACEBOX = '/tmp/omnibreak-tracebox';
 const REMOTE_TRACE_FILE = '/tmp/omnibreak-trace.pftrace';

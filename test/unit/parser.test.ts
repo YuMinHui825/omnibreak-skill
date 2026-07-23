@@ -1,4 +1,4 @@
-import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from '../../src/gdbMiParser';
+import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from '../../src/debug/parser';
 
 describe('gdbMiParser', () => {
   describe('parseThreadInfo', () => {

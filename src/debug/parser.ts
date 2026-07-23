@@ -1,4 +1,4 @@
-import { MiResult, MiAsyncRecord } from './types';
+import { MiResult, MiAsyncRecord } from '../shared/types';
 
 type RecordCallback = (record: MiAsyncRecord) => void;
 type ResultCallback = (result: MiResult) => void;

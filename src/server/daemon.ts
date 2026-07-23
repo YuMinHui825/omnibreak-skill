@@ -1,10 +1,10 @@
 import * as http from 'http';
-import { GdbMiClient, GdbLaunchOptions } from './gdbMiClient';
-import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from './gdbMiParser';
-import { SourceMapper } from './sourceMapper';
-import { CliOutput, ThreadInfo, FrameInfo, VarInfo, SourceLine, StatsResult, LeakResult, TraceCaptureResult, StatsSnapshot, DiffResult, log } from './types';
-import { Transport, createTransport, parseTarget } from './transport';
-import { traceCapture } from './trace';
+import { GdbMiClient, GdbLaunchOptions } from '../debug/client';
+import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from '../debug/parser';
+import { SourceMapper } from '../debug/mapper';
+import { CliOutput, ThreadInfo, FrameInfo, VarInfo, SourceLine, StatsResult, LeakResult, TraceCaptureResult, StatsSnapshot, DiffResult, log } from '../shared/types';
+import { Transport, createTransport, parseTarget } from '../transport/transport';
+import { traceCapture } from '../trace/trace';
 
 const PORT = 49200;
 let sessionCounter = 0;

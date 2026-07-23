@@ -1,4 +1,4 @@
-import { parseTarget, createTransport, Transport } from '../../src/transport';
+import { parseTarget, createTransport, Transport } from '../../src/transport/transport';
 
 describe('parseTarget', () => {
   it('parses SSH target', () => {

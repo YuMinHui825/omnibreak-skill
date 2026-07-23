@@ -1,4 +1,4 @@
-import { analyzeCoredump } from '../../src/coredump';
+import { analyzeCoredump } from '../../src/analysis/coredump';
 import * as fs from 'fs';
 import * as os from 'os';
 import { join } from 'path';

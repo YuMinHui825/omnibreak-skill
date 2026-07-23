@@ -35,7 +35,7 @@ prog.name('omnibreak').description('Remote Linux debugger CLI').version(pkg.vers
 prog.command('daemon').description('Start the session daemon (run in background: omnibreak daemon &)')
   .action(() => {
     const { spawn } = require('child_process');
-    const daemonPath = require('path').join(__dirname, 'daemon.js');
+    const daemonPath = require('path').join(__dirname, 'server', 'daemon.js');
     const child = spawn(process.execPath, [daemonPath], {
       detached: true, stdio: 'ignore',
     });
@@ -178,7 +178,7 @@ prog.command('coredump').description('Analyze core dump locally with GDB')
   .requiredOption('--core <path>', 'Core dump file')
   .option('--gdb <path>', 'GDB binary', '/usr/bin/gdb-multiarch')
   .action(o => {
-    const { analyzeCoredump } = require('./coredump');
+    const { analyzeCoredump } = require('./analysis/coredump');
     console.log(JSON.stringify(analyzeCoredump(o.binary, o.core, o.gdb)));
   });
 prog.command('deploy').description('SCP file to target')
@@ -188,7 +188,7 @@ prog.command('deploy').description('SCP file to target')
   .option('--user <name>', 'SSH user', 'root')
   .option('--pwd <pass>', 'SSH password')
   .action(o => {
-    const { scpDeploy } = require('./ssh');
+    const { scpDeploy } = require('./shared/ssh');
     const c = { host: o.target, user: o.user || 'root', port: 22, password: o.pwd };
     scpDeploy(o.source, c, o.dest);
     console.log(JSON.stringify({ ok: true, result: `Deployed ${o.source} → ${o.target}:${o.dest}` }));
