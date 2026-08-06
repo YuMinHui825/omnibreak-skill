@@ -184,6 +184,10 @@ omnibreak launch --target <IP|local|docker://<ctr>> --binary <PATH>
   --skip-gdbserver       Skip starting gdbserver (if already running)
 ```
 
+> **Local debugging:** `--target local` runs the debugger on this machine (no SSH).
+> Works for `launch`/`attach`/`break`/`watch`/`status`/`stats`/`leaks`/`diff`.
+> `trace` and `deploy` do not support local targets (`trace` needs an SSH target, `deploy` is SSH-only).
+
 ### Attach Options
 
 ```

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GdbMiParser = void 0;
 exports.parseBreakpoint = parseBreakpoint;
+exports.parseWatchpoint = parseWatchpoint;
 exports.parseThreadInfo = parseThreadInfo;
 exports.parseFrames = parseFrames;
 exports.parseVariables = parseVariables;
@@ -71,6 +72,23 @@ function parseBreakpoint(data) {
     const result = {};
     const clean = data.replace(/^\^?\w+,/, '');
     const match = clean.match(/^bkpt=\{(.+)\}$/);
+    if (match) {
+        for (const pair of match[1].split(',')) {
+            const eqIdx = pair.indexOf('=');
+            if (eqIdx < 0)
+                continue;
+            const key = pair.substring(0, eqIdx).trim();
+            const value = pair.substring(eqIdx + 1).replace(/^"(.*)"$/, '$1').trim();
+            result[key] = value;
+        }
+    }
+    return result;
+}
+/** Parse a `-break-watch` reply, which uses `wpt={...}` rather than `bkpt={...}`. */
+function parseWatchpoint(data) {
+    const result = {};
+    const clean = data.replace(/^\^?\w+,/, '');
+    const match = clean.match(/^wpt=\{(.+)\}$/);
     if (match) {
         for (const pair of match[1].split(',')) {
             const eqIdx = pair.indexOf('=');

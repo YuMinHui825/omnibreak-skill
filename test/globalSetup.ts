@@ -6,7 +6,7 @@ export default function globalSetup(): void {
   execSync('sleep 0.5', { stdio: 'pipe' });
 
   // Start daemon
-  const cmd = 'nohup node ' + __dirname + '/../out/daemon.js > /tmp/omnibreak-daemon-test.log 2>&1 & echo $!';
+  const cmd = 'nohup node ' + __dirname + '/../out/server/daemon.js > /tmp/omnibreak-daemon-test.log 2>&1 & echo $!';
   const pid = execSync(cmd, { encoding: 'utf8', shell: '/bin/bash' }).trim();
 
   // Wait for daemon to be ready

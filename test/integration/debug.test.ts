@@ -53,7 +53,8 @@ describe('Debug Lifecycle', () => {
 
     const r = cli('watch --expr i --type write');
     expect(r.ok).toBe(true);
-    expect(r.breakpoints[0].verified).toBe(true);
+    expect(r.watchpoints[0].verified).toBe(true);
+    expect(r.watchpoints[0].expr).toBe('i');
     cli('stop');
   });
 

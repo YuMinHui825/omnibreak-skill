@@ -43,11 +43,17 @@ Before starting, ask the user for anything missing:
 
 ## Install
 
-```bash
-git clone https://github.com/YuMinHui825/omnibreak-skill.git
-cd omnibreak-skill
-npm install --production && npm link
-```
+1. **On the target machine (Linux)** — install the GDB server (once):
+   ```bash
+   sudo apt install -y gdbserver gdb-multiarch
+   ```
+   `gdbserver` is required for remote (and local) sessions. The `launch`/`attach` commands start it automatically — you only need to install it.
+2. **On the dev machine** — install this skill:
+   ```bash
+   git clone https://github.com/YuMinHui825/omnibreak-skill.git
+   cd omnibreak-skill
+   npm install --production && npm link
+   ```
 
 Pre-compiled — no build step needed.
 
@@ -88,6 +94,10 @@ omnibreak next    | n         Step over — auto-returns status [--session ID]
 omnibreak step    | s         Step into — auto-returns status [--session ID]
 ```
 
+> **Local debugging:** `--target local` runs the debugger on the current machine (no SSH).
+> Supported by `launch`/`attach`/`break`/`watch`/`status`/`stats`/`leaks`/`diff`.
+> Not supported: `trace` (requires an SSH target) and `deploy` (SSH-only).
+
 ### Inspection
 ```
 omnibreak status [--session ID]    Threads, frames, variables
@@ -126,6 +136,13 @@ omnibreak trace --target <IP> [--duration 10] [--sudo] [--pwd <pass>]
 ### Utility
 ```
 omnibreak deploy --source <LOCAL> --target <IP> --dest <PATH>
+```
+
+### Diagnostics
+```
+omnibreak report   [--session ID] [--save <path>]      Diagnostic report (JSON + markdown file)
+omnibreak sanitize --target <IP> [--session ID]        Parse ASan/UBSan/TSan output from target
+omnibreak diff     --pid <N> --target <IP> [--wait ms] Compare process metrics over time (before/after fix)
 ```
 
 ## Key Patterns

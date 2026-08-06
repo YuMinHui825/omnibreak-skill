@@ -1,6 +1,6 @@
 import * as http from 'http';
 import { GdbMiClient, GdbLaunchOptions } from '../debug/client';
-import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from '../debug/parser';
+import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint } from '../debug/parser';
 import { SourceMapper } from '../debug/mapper';
 import { CliOutput, ThreadInfo, FrameInfo, VarInfo, SourceLine, StatsResult, LeakResult, TraceCaptureResult, StatsSnapshot, DiffResult, log } from '../shared/types';
 import { Transport, createTransport, parseTarget } from '../transport/transport';
@@ -17,6 +17,12 @@ interface Session {
   target: string;
   binary: string;
   transport: Transport;
+  /** gdbserver port this session bound on the target */
+  port: number;
+  /** Whether gdbserver was started with sudo */
+  sudo: boolean;
+  /** Whether this session started its own gdbserver (false for --skip-gdbserver) */
+  startedGdbserver: boolean;
 }
 
 const sessions = new Map<string, Session>();
@@ -96,7 +102,7 @@ async function handleLaunch(body: any): Promise<CliOutput> {
   await gdb.sendCommand(`-interpreter-exec console "set remote exec-file ${body.binary}"`);
   await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
 
-  const session: Session = { id, gdb, mapper, firstContinue: true, target: body.target, binary: body.binary, transport: t };
+  const session: Session = { id, gdb, mapper, firstContinue: true, target: body.target, binary: body.binary, transport: t, port, sudo: !!body.sudo, startedGdbserver: !body.skipGdbserver };
   sessions.set(id, session);
   lastId = id;
 
@@ -144,7 +150,7 @@ async function handleAttach(body: any): Promise<CliOutput> {
   if (body.binary) await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
   await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
 
-  const session: Session = { id, gdb, mapper, firstContinue: false, target: body.target, binary: body.binary || '', transport: t };
+  const session: Session = { id, gdb, mapper, firstContinue: false, target: body.target, binary: body.binary || '', transport: t, port, sudo: !!body.sudo, startedGdbserver: true };
   sessions.set(id, session);
   lastId = id;
 
@@ -152,14 +158,26 @@ async function handleAttach(body: any): Promise<CliOutput> {
 }
 
 async function handleStop(sessionId?: string): Promise<CliOutput> {
+  // stop previously left the target-side gdbserver running, so the port stayed bound and
+  // consecutive launch/stop cycles collided. Kill the gdbserver we started for this session.
+  const killGdbserver = async (s: Session) => {
+    if (!s.startedGdbserver) return;
+    const sudo = s.sudo ? 'sudo ' : '';
+    try { await s.transport.exec(`${sudo}fuser -k ${s.port}/tcp 2>/dev/null || true`); } catch {}
+  };
   if (sessionId) {
     const s = sessions.get(sessionId);
-    if (s) { await s.gdb.terminate(); sessions.delete(sessionId); }
+    if (s) {
+      await s.gdb.terminate();
+      await killGdbserver(s);
+      sessions.delete(sessionId);
+    }
     if (lastId === sessionId) lastId = null;
     return ok();
   }
   for (const [id, s] of sessions) {
     try { await s.gdb.terminate(); } catch {}
+    await killGdbserver(s);
     sessions.delete(id);
   }
   lastId = null;
@@ -230,8 +248,12 @@ async function handleWatch(sid: string | undefined, expr: string, type?: string)
     if (type === 'read') cmd += ' -r';
     else if (type === 'access') cmd += ' -a';
     const result = await s.gdb.sendCommand(`${cmd} ${expr}`);
-    const info = parseBreakpoint(result.data);
-    return ok({ breakpoints: [{ id: parseInt(info.number || '0'), file: expr, line: 0, verified: true }] });
+    // -break-watch replies with `wpt={...}` (number/exp/type), not `bkpt={...}`
+    const info = parseWatchpoint(result.data);
+    const watchType = type === 'read' ? 'read' : type === 'access' ? 'access' : 'write';
+    // Only claim verified when GDB actually returned a watchpoint number — otherwise id falls
+    // back to 0 and we'd reproduce the "fake success" the old handler emitted.
+    return ok({ watchpoints: [{ id: parseInt(info.number || '0'), expr: info.exp || expr, type: watchType, verified: !!info.number }] });
   } catch (e: any) { return fail(`Watchpoint failed: ${e.message}`); }
 }
 

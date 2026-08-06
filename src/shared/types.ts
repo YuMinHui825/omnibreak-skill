@@ -30,6 +30,7 @@ export interface CliOutput {
   vars?: VarInfo[];
   result?: string;
   breakpoints?: BreakpointInfo[];
+  watchpoints?: WatchpointInfo[];
   context?: SourceLine[];
 }
 
@@ -37,6 +38,7 @@ export interface ThreadInfo { id: number; name: string; state: string }
 export interface FrameInfo { level: number; func: string; file: string; line: number }
 export interface VarInfo { name: string; value: string }
 export interface BreakpointInfo { id: number; file: string; line: number; verified: boolean }
+export interface WatchpointInfo { id: number; expr: string; type: 'read' | 'write' | 'access'; verified: boolean }
 export interface SourceLine { line: number; code: string; isTarget: boolean }
 
 /** Session state stored in /tmp/omnibreak-session.json */

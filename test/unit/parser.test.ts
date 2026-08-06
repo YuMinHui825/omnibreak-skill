@@ -1,4 +1,4 @@
-import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint } from '../../src/debug/parser';
+import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint } from '../../src/debug/parser';
 
 describe('gdbMiParser', () => {
   describe('parseThreadInfo', () => {
@@ -66,6 +66,21 @@ describe('gdbMiParser', () => {
       expect(result.number).toBe('1');
       expect(result.file).toBe('foo.c');
       expect(result.line).toBe('42');
+    });
+  });
+
+  describe('parseWatchpoint', () => {
+    it('parses watchpoint info from wpt={...}', () => {
+      const input = 'done,wpt={number="2",exp="counter",type="-break-watch",disp="keep",enabled="y",times="0",original-location="counter"}';
+      const result = parseWatchpoint(input);
+      expect(result.number).toBe('2');
+      expect(result.exp).toBe('counter');
+      expect(result.type).toBe('-break-watch');
+    });
+
+    it('does not match bkpt tuples (returns empty)', () => {
+      const result = parseWatchpoint('done,bkpt={number="1",type="breakpoint"}');
+      expect(Object.keys(result)).toHaveLength(0);
     });
   });
 });

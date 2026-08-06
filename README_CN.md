@@ -183,6 +183,9 @@ omnibreak launch --target <IP|local|docker://<容器>> --binary <PATH>
   --skip-gdbserver       跳过 gdbserver 启动（已运行时）
 ```
 
+> **本地调试：** `--target local` 在本机直接调试（不走 SSH）。launch/attach/break/watch/status/stats/leaks/diff 均可用；
+> `trace` 与 `deploy` 不支持 local 目标（`trace` 需要 SSH 目标，`deploy` 仅支持 SSH）。
+
 ### Attach 选项
 
 ```

@@ -120,7 +120,7 @@ async function handleLaunch(body) {
     await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
     await gdb.sendCommand(`-interpreter-exec console "set remote exec-file ${body.binary}"`);
     await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
-    const session = { id, gdb, mapper, firstContinue: true, target: body.target, binary: body.binary, transport: t };
+    const session = { id, gdb, mapper, firstContinue: true, target: body.target, binary: body.binary, transport: t, port, sudo: !!body.sudo, startedGdbserver: !body.skipGdbserver };
     sessions.set(id, session);
     lastId = id;
     await new Promise(resolve => {
@@ -168,16 +168,28 @@ async function handleAttach(body) {
     if (body.binary)
         await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
     await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
-    const session = { id, gdb, mapper, firstContinue: false, target: body.target, binary: body.binary || '', transport: t };
+    const session = { id, gdb, mapper, firstContinue: false, target: body.target, binary: body.binary || '', transport: t, port, sudo: !!body.sudo, startedGdbserver: true };
     sessions.set(id, session);
     lastId = id;
     return await handleStatusById(session);
 }
 async function handleStop(sessionId) {
+    // stop previously left the target-side gdbserver running, so the port stayed bound and
+    // consecutive launch/stop cycles collided. Kill the gdbserver we started for this session.
+    const killGdbserver = async (s) => {
+        if (!s.startedGdbserver)
+            return;
+        const sudo = s.sudo ? 'sudo ' : '';
+        try {
+            await s.transport.exec(`${sudo}fuser -k ${s.port}/tcp 2>/dev/null || true`);
+        }
+        catch { }
+    };
     if (sessionId) {
         const s = sessions.get(sessionId);
         if (s) {
             await s.gdb.terminate();
+            await killGdbserver(s);
             sessions.delete(sessionId);
         }
         if (lastId === sessionId)
@@ -189,6 +201,7 @@ async function handleStop(sessionId) {
             await s.gdb.terminate();
         }
         catch { }
+        await killGdbserver(s);
         sessions.delete(id);
     }
     lastId = null;
@@ -258,8 +271,12 @@ async function handleWatch(sid, expr, type) {
         else if (type === 'access')
             cmd += ' -a';
         const result = await s.gdb.sendCommand(`${cmd} ${expr}`);
-        const info = (0, parser_1.parseBreakpoint)(result.data);
-        return ok({ breakpoints: [{ id: parseInt(info.number || '0'), file: expr, line: 0, verified: true }] });
+        // -break-watch replies with `wpt={...}` (number/exp/type), not `bkpt={...}`
+        const info = (0, parser_1.parseWatchpoint)(result.data);
+        const watchType = type === 'read' ? 'read' : type === 'access' ? 'access' : 'write';
+        // Only claim verified when GDB actually returned a watchpoint number — otherwise id falls
+        // back to 0 and we'd reproduce the "fake success" the old handler emitted.
+        return ok({ watchpoints: [{ id: parseInt(info.number || '0'), expr: info.exp || expr, type: watchType, verified: !!info.number }] });
     }
     catch (e) {
         return fail(`Watchpoint failed: ${e.message}`);

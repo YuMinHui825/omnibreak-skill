@@ -80,6 +80,23 @@ export function parseBreakpoint(data: string): Record<string, string> {
   return result;
 }
 
+/** Parse a `-break-watch` reply, which uses `wpt={...}` rather than `bkpt={...}`. */
+export function parseWatchpoint(data: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  const clean = data.replace(/^\^?\w+,/, '');
+  const match = clean.match(/^wpt=\{(.+)\}$/);
+  if (match) {
+    for (const pair of match[1].split(',')) {
+      const eqIdx = pair.indexOf('=');
+      if (eqIdx < 0) continue;
+      const key = pair.substring(0, eqIdx).trim();
+      const value = pair.substring(eqIdx + 1).replace(/^"(.*)"$/, '$1').trim();
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 export function parseThreadInfo(data: string): Array<{ id: string; name: string; state: string }> {
   const threads: Array<{ id: string; name: string; state: string }> = [];
   const match = data.match(/^done,threads=\[([\s\S]+)\],current-thread-id=/);
