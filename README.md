@@ -40,6 +40,14 @@ omnibreak stop
 sudo apt install -y gdbserver gdb-multiarch
 ```
 
+> **Known GDB limitation (multi-threaded breakpoints):** a breakpoint on a line shared by
+> several threads stops once per thread, then goes inert — GDB's all-stop step-over does not
+> re-evaluate a condition that was false on the first hit. Verified identical on GDB 12.1 and
+> GDB 17.2 (software/hardware breakpoints, `-O0`/`-Og`, host/target eval, non-stop). It is a GDB
+> `infrun` limitation, not an OmniBreak bug — `--condition` works on single-threaded programs.
+> Workaround: break at a less-contended line (break once, inspect, `continue` manually) or use
+> a watchpoint.
+
 ### Language Support
 | Language | Support | Notes |
 |----------|---------|-------|
@@ -182,6 +190,10 @@ omnibreak launch --target <IP|local|docker://<ctr>> --binary <PATH>
   --ubsan                Enable UndefinedBehaviorSanitizer (UBSan)
   --tsan                 Enable ThreadSanitizer (TSan)
   --skip-gdbserver       Skip starting gdbserver (if already running)
+  --gdb-path <path>      GDB binary on target (default /usr/bin/gdb-multiarch)
+  --gdbserver-path <path> gdbserver binary on target (default: gdbserver from PATH)
+  --env <key=value>      Set an env var in the inferior (repeatable)
+  --args <value>         Pass an arg to the inferior (repeatable)
 ```
 
 > **Local debugging:** `--target local` runs the debugger on this machine (no SSH).

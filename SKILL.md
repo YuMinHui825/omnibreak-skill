@@ -48,6 +48,19 @@ Before starting, ask the user for anything missing:
    sudo apt install -y gdbserver gdb-multiarch
    ```
    `gdbserver` is required for remote (and local) sessions. The `launch`/`attach` commands start it automatically — you only need to install it.
+   Session cleanup kills gdbserver by PID via `pgrep`/`kill` (from `procps`, bundled with `ps`) — no `psmisc`/`fuser` required.
+
+   **Known GDB limitation (verified):** a breakpoint on a line shared by several threads only
+   stops once per thread, then goes inert — GDB's all-stop step-over (stop all → remove SWBP →
+   single-step → reinsert → resume) deduplicates repeated hits on the same PC and does not
+   re-evaluate a condition that was false on the first hit. Verified identical on GDB 12.1
+   (Ubuntu default) and GDB 17.2 (built from source), with software/hardware breakpoints,
+   `-O0`/`-Og`, host- and target-side condition evaluation, and non-stop mode. This is a GDB
+   `infrun` limitation (the community is still fixing related step-over bugs in 2026), not an
+   OmniBreak bug — `--condition` itself is MI-correct and works on single-threaded programs.
+   Workarounds: break at a less-contended line (break once, inspect state, then `continue`
+   manually), or use a watchpoint.
+   `--gdb-path` / `--gdbserver-path` still let you point at any GDB build on the target.
 2. **On the dev machine** — install this skill:
    ```bash
    git clone https://github.com/YuMinHui825/omnibreak-skill.git
@@ -83,11 +96,17 @@ omnibreak health              Daemon status + active session count
 omnibreak launch  --target <IP|local|docker://ctr> --binary <PATH>
                   [--user root] [--port 2345] [--pwd <pass>]
                   [--deploy-source <LOCAL>] [--sudo] [--skip-gdbserver]
+                  [--gdb-path <PATH>] [--gdbserver-path <PATH>]   # custom GDB/gdbserver on target
+                  [--env KEY=VALUE]... [--args ARG]...    # inferior env vars + argv
 
 omnibreak attach  --target <IP> --process <NAME>|--pid <N>
                   [--binary <PATH>] [--pwd <pass>] [--sudo]
 
 omnibreak break   --file <PATH> --line <N> [--condition "x>100"] [--session ID]
+                  # NOTE: single-threaded programs → conditions are reliable. Multi-threaded
+                  # targets → GDB may stop only once per thread on a shared breakpoint and never
+                  # re-evaluate a condition that was false on the first hit
+                  # (see Install → Known GDB limitation).
 omnibreak watch   --expr <VAR> [--type write|read|access] [--session ID]
 omnibreak continue | c        Resume — auto-returns status [--session ID]
 omnibreak next    | n         Step over — auto-returns status [--session ID]

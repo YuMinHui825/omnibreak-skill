@@ -40,6 +40,13 @@ omnibreak stop
 sudo apt install -y gdbserver gdb-multiarch
 ```
 
+> **已知 GDB 限制（多线程断点，已实测验证）：** 位于多线程共享代码行上的断点，每个线程
+> 只触发一次后即失效 — GDB 的 all-stop step-over 机制不会重新求值「首次命中时为 false」
+> 的条件。实测在 GDB 12.1 和 17.2（源码编译）上行为完全一致：软/硬件断点、`-O0`/`-Og`、
+> 宿主机/目标机条件求值、non-stop 模式均相同。这是 GDB `infrun` 层的限制，不是 OmniBreak
+> 的 bug —— `--condition` 本身 MI 构造正确，单线程程序上可靠工作。
+> 变通方案：在低频命中的代码行下断点（只停一次、检查状态、手动 `continue`），或改用 watchpoint。
+
 ### 语言支持
 | 语言 | 支持程度 | 说明 |
 |------|---------|------|
@@ -181,6 +188,10 @@ omnibreak launch --target <IP|local|docker://<容器>> --binary <PATH>
   --ubsan                启用 UndefinedBehaviorSanitizer（UBSan）
   --tsan                 启用 ThreadSanitizer（TSan）
   --skip-gdbserver       跳过 gdbserver 启动（已运行时）
+  --gdb-path <path>      目标机 GDB 二进制（默认 /usr/bin/gdb-multiarch）
+  --gdbserver-path <path> 目标机 gdbserver 二进制（默认 PATH 里的 gdbserver）
+  --env <key=value>      给被调试程序设置环境变量（可重复）
+  --args <value>         给被调试程序传参（可重复）
 ```
 
 > **本地调试：** `--target local` 在本机直接调试（不走 SSH）。launch/attach/break/watch/status/stats/leaks/diff 均可用；

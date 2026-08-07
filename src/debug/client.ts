@@ -1,6 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import { EventEmitter } from 'events';
-import { GdbMiParser } from './parser';
+import { GdbMiParser, extractMiString } from './parser';
 import { MiResult, MiAsyncRecord } from '../shared/types';
 
 export declare interface GdbMiClient {
@@ -145,8 +145,8 @@ export class GdbMiClient extends EventEmitter {
     if (pending) {
       this.pending.delete(result.token);
       if (result.class === 'error') {
-        const msgMatch = result.data.match(/msg="([^"]*)"/);
-        pending.reject(new Error(msgMatch?.[1] || result.data));
+        const msgMatch = extractMiString(result.data, 'msg');
+        pending.reject(new Error(msgMatch || result.data));
       } else {
         pending.resolve(result);
       }

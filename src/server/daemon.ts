@@ -1,6 +1,6 @@
 import * as http from 'http';
 import { GdbMiClient, GdbLaunchOptions } from '../debug/client';
-import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint } from '../debug/parser';
+import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint, extractMiString } from '../debug/parser';
 import { SourceMapper } from '../debug/mapper';
 import { CliOutput, ThreadInfo, FrameInfo, VarInfo, SourceLine, StatsResult, LeakResult, TraceCaptureResult, StatsSnapshot, DiffResult, log } from '../shared/types';
 import { Transport, createTransport, parseTarget } from '../transport/transport';
@@ -58,6 +58,26 @@ async function waitForPort(t: Transport, port: number, timeoutMs: number): Promi
   }
 }
 
+/** Quote a string as a GDB/MI c-string literal. */
+function miQuote(s: string): string {
+  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
+
+/**
+ * Kill the gdbserver bound to `port` on the target. Uses `pkill` (procps, ships with `ps`
+ * on every distro) instead of `fuser -k` (psmisc), which is absent on minimal targets.
+ * Runs via execSafe (base64) so `$()` / `$` aren't re-expanded by the SSH shell wrapper,
+ * and the `[r]` self-match guard stops pkill from killing this shell's own command line.
+ */
+async function killGdbserverOnPort(t: Transport, port: number | string, sudo: string): Promise<void> {
+  const p = typeof port === 'number' ? port : parseInt(String(port)) || 2345;
+  const cmd = `${sudo}pkill -f 'gdbserve[r].*:${p}([^0-9]|$)' 2>/dev/null || true`;
+  try {
+    if (t.execSafe) await t.execSafe(cmd);
+    else await t.exec(cmd);
+  } catch {}
+}
+
 async function handleLaunch(body: any): Promise<CliOutput> {
   const t = getTransport(body);
   const port = body.port || 2345;
@@ -70,7 +90,8 @@ async function handleLaunch(body: any): Promise<CliOutput> {
   // Start gdbserver — kill only our own port, not all gdbservers
   const isLocal = body.target === 'local';
   const sudo = body.sudo ? 'sudo ' : '';
-  try { await t.exec(`${sudo}fuser -k ${port}/tcp 2>/dev/null || true`); } catch {}
+  const gdbserverBin = body.gdbserverPath || 'gdbserver';
+  await killGdbserverOnPort(t, port, sudo);
   // Build sanitizer env vars
   const sanitizeEnv: string[] = [];
   if (body.asan) sanitizeEnv.push('ASAN_OPTIONS=halt_on_error=0:abort_on_error=1:log_path=/tmp/omnibreak_asan');
@@ -80,10 +101,10 @@ async function handleLaunch(body: any): Promise<CliOutput> {
 
   if (!body.skipGdbserver) {
     if (isLocal) {
-      await t.exec(`rm -f /tmp/omnibreak_output.log; ${sanEnv}nohup ${sudo}gdbserver --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
+      await t.exec(`rm -f /tmp/omnibreak_output.log; ${sanEnv}nohup ${sudo}${gdbserverBin} --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
     } else {
       // env vars go before setsid+stdbuf, not between stdbuf and gdbserver
-      await t.exec(`rm -f /tmp/omnibreak_output.log; ${sanEnv}setsid stdbuf -o0 ${sudo}gdbserver --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
+      await t.exec(`rm -f /tmp/omnibreak_output.log; ${sanEnv}setsid stdbuf -o0 ${sudo}${gdbserverBin} --multi :${port} >/tmp/omnibreak_output.log 2>&1 &`);
     }
     // Poll for port readiness instead of fixed 1.5s sleep
     await waitForPort(t, port, 5000);
@@ -98,9 +119,20 @@ async function handleLaunch(body: any): Promise<CliOutput> {
   });
   await gdb.init();
   await gdb.sendCommand(body.nonStop ? '-gdb-set non-stop on' : '-gdb-set non-stop off');
-  await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
-  await gdb.sendCommand(`-interpreter-exec console "set remote exec-file ${body.binary}"`);
+  await gdb.sendCommand(`-file-exec-and-symbols ${miQuote(body.binary)}`);
+  await gdb.sendCommand(`-interpreter-exec console ${miQuote(`set remote exec-file ${body.binary}`)}`);
   await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
+
+  // Env vars + argv — set before the inferior starts (applies on the first -exec-run)
+  for (const envVar of body.env || []) {
+    const eq = String(envVar).indexOf('=');
+    if (eq <= 0) continue;
+    const setEnv = `set environment ${String(envVar).substring(0, eq)} ${String(envVar).substring(eq + 1)}`;
+    await gdb.sendCommand(`-interpreter-exec console ${miQuote(setEnv)}`).catch(() => {});
+  }
+  if (body.args && body.args.length > 0) {
+    await gdb.sendCommand(`-exec-arguments ${body.args.map((a: string) => miQuote(a)).join(' ')}`).catch(() => {});
+  }
 
   const session: Session = { id, gdb, mapper, firstContinue: true, target: body.target, binary: body.binary, transport: t, port, sudo: !!body.sudo, startedGdbserver: !body.skipGdbserver };
   sessions.set(id, session);
@@ -130,11 +162,12 @@ async function handleAttach(body: any): Promise<CliOutput> {
 
   const isLocal = body.target === 'local';
   const sudo = body.sudo ? 'sudo ' : '';
-  try { await t.exec(`${sudo}fuser -k ${port}/tcp 2>/dev/null || true`); } catch {}
+  const gdbserverBin = body.gdbserverPath || 'gdbserver';
+  await killGdbserverOnPort(t, port, sudo);
   if (isLocal) {
-    await t.exec(`${sudo}gdbserver --attach :${port} ${pid} &`);
+    await t.exec(`${sudo}${gdbserverBin} --attach :${port} ${pid} &`);
   } else {
-    await t.exec(`setsid stdbuf -o0 ${sudo}gdbserver --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &`);
+    await t.exec(`setsid stdbuf -o0 ${sudo}${gdbserverBin} --attach :${port} ${pid} >/tmp/omnibreak_output.log 2>&1 &`);
   }
   // Poll for port readiness instead of fixed sleep
   await waitForPort(t, port, 5000);
@@ -146,8 +179,8 @@ async function handleAttach(body: any): Promise<CliOutput> {
     sshRemote: body.target === 'local' ? undefined : { host: body.target, user: body.user || 'root', port: 22, password: body.pwd },
   });
   await gdb.init();
-  if (body.solibPath) await gdb.sendCommand(`-interpreter-exec console "set solib-search-path ${body.solibPath}"`);
-  if (body.binary) await gdb.sendCommand(`-file-exec-and-symbols ${body.binary}`);
+  if (body.solibPath) await gdb.sendCommand(`-interpreter-exec console ${miQuote(`set solib-search-path ${body.solibPath}`)}`);
+  if (body.binary) await gdb.sendCommand(`-file-exec-and-symbols ${miQuote(body.binary)}`);
   await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
 
   const session: Session = { id, gdb, mapper, firstContinue: false, target: body.target, binary: body.binary || '', transport: t, port, sudo: !!body.sudo, startedGdbserver: true };
@@ -163,7 +196,7 @@ async function handleStop(sessionId?: string): Promise<CliOutput> {
   const killGdbserver = async (s: Session) => {
     if (!s.startedGdbserver) return;
     const sudo = s.sudo ? 'sudo ' : '';
-    try { await s.transport.exec(`${sudo}fuser -k ${s.port}/tcp 2>/dev/null || true`); } catch {}
+    await killGdbserverOnPort(s.transport, s.port, sudo);
   };
   if (sessionId) {
     const s = sessions.get(sessionId);
@@ -195,7 +228,9 @@ async function handleBreak(sid: string | undefined, file: string, line: number, 
   try {
     await s.gdb.sendCommand('-gdb-set breakpoint pending on').catch(() => {});
     const loc = `-f ${file}:${line}`;
-    const cmd = condition ? `-break-insert ${loc} -c "${condition}"` : `-break-insert ${loc}`;
+    // GDB/MI requires `-c condition` BEFORE the location; the old order made GDB report
+    // "Garbage following <location>". The condition must be a proper MI c-string.
+    const cmd = condition ? `-break-insert -c ${miQuote(condition)} ${loc}` : `-break-insert ${loc}`;
     const result = await s.gdb.sendCommand(cmd);
     const info = parseBreakpoint(result.data);
     return ok({ breakpoints: [{ id: parseInt(info.number || '0'), file, line, verified: true }] });
@@ -247,7 +282,9 @@ async function handleWatch(sid: string | undefined, expr: string, type?: string)
     let cmd = '-break-watch';
     if (type === 'read') cmd += ' -r';
     else if (type === 'access') cmd += ' -a';
-    const result = await s.gdb.sendCommand(`${cmd} ${expr}`);
+    // -break-watch takes exactly ONE expression argument — quote it so expressions with
+    // spaces (e.g. `i + 1`) survive MI tokenization instead of failing with "Unknown argument".
+    const result = await s.gdb.sendCommand(`${cmd} ${miQuote(expr)}`);
     // -break-watch replies with `wpt={...}` (number/exp/type), not `bkpt={...}`
     const info = parseWatchpoint(result.data);
     const watchType = type === 'read' ? 'read' : type === 'access' ? 'access' : 'write';
@@ -346,9 +383,9 @@ async function handleCrash(sid?: string): Promise<CliOutput> {
 
 async function handleEval(sid: string | undefined, expr: string): Promise<CliOutput> {
   const s = requireSession(sid);
-  const result = await s.gdb.sendCommand(`-data-evaluate-expression "${expr}"`);
-  const m = result.data.match(/done,value="([^"]*)"/);
-  return ok({ result: m ? m[1] : result.data });
+  const result = await s.gdb.sendCommand(`-data-evaluate-expression ${miQuote(expr)}`);
+  const value = extractMiString(result.data, 'value');
+  return ok({ result: value !== undefined ? value : result.data });
 }
 
 async function handleGdbRaw(sid: string | undefined, cmd: string): Promise<CliOutput> {

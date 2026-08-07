@@ -5,6 +5,7 @@ const commander_1 = require("commander");
 const http_1 = require("http");
 const PORT = 49200;
 function jsonLog(obj) { console.log(JSON.stringify(obj)); }
+function collect(val, prev) { return prev.concat([val]); }
 function daemonCall(cmd, data) {
     return new Promise((resolve, reject) => {
         const body = data ? JSON.stringify(data) : '';
@@ -58,6 +59,10 @@ prog.command('launch').description('Start a debug session')
     .option('--ubsan', 'Enable UndefinedBehaviorSanitizer')
     .option('--tsan', 'Enable ThreadSanitizer')
     .option('--skip-gdbserver', 'Skip starting gdbserver (already running)')
+    .option('--gdb-path <path>', 'GDB binary on target (default /usr/bin/gdb-multiarch)')
+    .option('--gdbserver-path <path>', 'gdbserver binary on target (default: gdbserver from PATH)')
+    .option('--env <key=value>', 'Set an environment variable in the inferior (repeatable)', collect, [])
+    .option('--args <value>', 'Pass an argument to the inferior (repeatable)', collect, [])
     .action(o => daemonCall('launch', { ...o, line: undefined }).then(jsonLog));
 prog.command('attach').description('Attach to running process')
     .requiredOption('--target <host>', 'Target Linux IP')
@@ -70,6 +75,8 @@ prog.command('attach').description('Attach to running process')
     .option('--solib-path <dir>', '.so search path')
     .option('--source-map <json>', 'Source path mapping')
     .option('--deploy-source <path>', 'Local binary to SCP before attach')
+    .option('--gdb-path <path>', 'GDB binary on target (default /usr/bin/gdb-multiarch)')
+    .option('--gdbserver-path <path>', 'gdbserver binary on target (default: gdbserver from PATH)')
     .option('--sudo', 'Use sudo for gdbserver commands')
     .action(o => daemonCall('attach', { ...o, processName: o.process }).then(jsonLog));
 prog.command('break').description('Set breakpoint')

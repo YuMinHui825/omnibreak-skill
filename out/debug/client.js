@@ -126,8 +126,8 @@ class GdbMiClient extends events_1.EventEmitter {
         if (pending) {
             this.pending.delete(result.token);
             if (result.class === 'error') {
-                const msgMatch = result.data.match(/msg="([^"]*)"/);
-                pending.reject(new Error(msgMatch?.[1] || result.data));
+                const msgMatch = (0, parser_1.extractMiString)(result.data, 'msg');
+                pending.reject(new Error(msgMatch || result.data));
             }
             else {
                 pending.resolve(result);

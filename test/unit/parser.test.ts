@@ -1,4 +1,4 @@
-import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint } from '../../src/debug/parser';
+import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint, extractMiString, unescapeMiString } from '../../src/debug/parser';
 
 describe('gdbMiParser', () => {
   describe('parseThreadInfo', () => {
@@ -81,6 +81,52 @@ describe('gdbMiParser', () => {
     it('does not match bkpt tuples (returns empty)', () => {
       const result = parseWatchpoint('done,bkpt={number="1",type="breakpoint"}');
       expect(Object.keys(result)).toHaveLength(0);
+    });
+  });
+
+  describe('extractMiString / unescapeMiString', () => {
+    it('extracts a value containing escaped quotes (no truncation)', () => {
+      // MI value with \" escapes inside the string
+      const data = 'done,value="0x7fff \\"hello world\\" 123"';
+      expect(extractMiString(data, 'value')).toBe('0x7fff "hello world" 123');
+    });
+
+    it('returns undefined when the key is absent', () => {
+      expect(extractMiString('done,foo="bar"', 'value')).toBeUndefined();
+    });
+
+    it('unescapes common GDB/MI escapes', () => {
+      expect(unescapeMiString('a\\"b\\\\c\\nd\\te')).toBe('a"b\\c\nd\te');
+    });
+  });
+
+  describe('quote-aware MI parsing (commas/escapes in values)', () => {
+    it('parseFrames keeps C++ template func with commas intact', () => {
+      const input = 'done,stack=[frame={level="0",func="std::map<int, std::string>::operator[]",file="x.cpp",line="5"}]';
+      const frames = parseFrames(input);
+      expect(frames).toHaveLength(1);
+      expect(frames[0].func).toBe('std::map<int, std::string>::operator[]');
+      expect(frames[0].line).toBe('5');
+    });
+
+    it('parseVariables keeps a value with a comma inside a string', () => {
+      const input = 'done,variables=[{name="s",value="\\"a, b\\""}]';
+      const vars = parseVariables(input);
+      expect(vars[0].value).toBe('"a, b"');
+    });
+
+    it('parseBreakpoint keeps a condition with a comma', () => {
+      const input = 'done,bkpt={number="1",cond="i > 1, j < 2",file="foo.c",line="42"}';
+      const bp = parseBreakpoint(input);
+      expect(bp.cond).toBe('i > 1, j < 2');
+      expect(bp.number).toBe('1');
+    });
+
+    it('parseThreadInfo handles multiple threads with quoted names', () => {
+      const input = 'done,threads=[{id="1",name="main thread"}, {id="2",name="worker"}],current-thread-id="1"';
+      const threads = parseThreadInfo(input);
+      expect(threads).toHaveLength(2);
+      expect(threads[0].name).toBe('main thread');
     });
   });
 });
