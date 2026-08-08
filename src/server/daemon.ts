@@ -1,6 +1,6 @@
 import * as http from 'http';
 import { GdbMiClient, GdbLaunchOptions } from '../debug/client';
-import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint, extractMiString } from '../debug/parser';
+import { parseThreadInfoWithCurrent, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint, extractMiString } from '../debug/parser';
 import { SourceMapper } from '../debug/mapper';
 import { CliOutput, ThreadInfo, FrameInfo, VarInfo, SourceLine, StatsResult, LeakResult, TraceCaptureResult, StatsSnapshot, DiffResult, log } from '../shared/types';
 import { Transport, createTransport, parseTarget } from '../transport/transport';
@@ -64,6 +64,21 @@ function miQuote(s: string): string {
 }
 
 /**
+ * Multi-process: control what GDB does across a fork().
+ *  - follow-fork-mode parent|child  — which side the debugger follows.
+ *  - detach-on-fork on|off          — off keeps BOTH processes under GDB (child becomes a
+ *    new inferior, stopped at the fork point), enabling debugging the forked child.
+ */
+async function applyForkSettings(gdb: GdbMiClient, body: any): Promise<void> {
+  if (body.followForkMode === 'parent' || body.followForkMode === 'child') {
+    await gdb.sendCommand(`-interpreter-exec console ${miQuote(`set follow-fork-mode ${body.followForkMode}`)}`).catch(() => {});
+  }
+  if (body.detachOnFork === 'on' || body.detachOnFork === 'off') {
+    await gdb.sendCommand(`-interpreter-exec console ${miQuote(`set detach-on-fork ${body.detachOnFork}`)}`).catch(() => {});
+  }
+}
+
+/**
  * Kill the gdbserver bound to `port` on the target. Uses `pkill` (procps, ships with `ps`
  * on every distro) instead of `fuser -k` (psmisc), which is absent on minimal targets.
  * Runs via execSafe (base64) so `$()` / `$` aren't re-expanded by the SSH shell wrapper,
@@ -122,6 +137,7 @@ async function handleLaunch(body: any): Promise<CliOutput> {
   await gdb.sendCommand(`-file-exec-and-symbols ${miQuote(body.binary)}`);
   await gdb.sendCommand(`-interpreter-exec console ${miQuote(`set remote exec-file ${body.binary}`)}`);
   await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
+  await applyForkSettings(gdb, body);
 
   // Env vars + argv — set before the inferior starts (applies on the first -exec-run)
   for (const envVar of body.env || []) {
@@ -182,6 +198,7 @@ async function handleAttach(body: any): Promise<CliOutput> {
   if (body.solibPath) await gdb.sendCommand(`-interpreter-exec console ${miQuote(`set solib-search-path ${body.solibPath}`)}`);
   if (body.binary) await gdb.sendCommand(`-file-exec-and-symbols ${miQuote(body.binary)}`);
   await gdb.sendCommand(`-target-select extended-remote localhost:${port}`);
+  await applyForkSettings(gdb, body);
 
   const session: Session = { id, gdb, mapper, firstContinue: false, target: body.target, binary: body.binary || '', transport: t, port, sudo: !!body.sudo, startedGdbserver: true };
   sessions.set(id, session);
@@ -326,11 +343,12 @@ async function handleStatusById(s: Session): Promise<CliOutput> {
   try {
     const out: CliOutput = { ok: true, status: 'stopped' };
     const threads = await s.gdb.sendCommand('-thread-info');
-    const tinfo: ThreadInfo[] = parseThreadInfo(threads.data).map(t => ({
-      id: parseInt(t.id), name: t.name, state: t.state
-    }));
+    const { threads: parsed, currentThreadId } = parseThreadInfoWithCurrent(threads.data);
+    const tinfo: ThreadInfo[] = parsed.map(t => ({ id: parseInt(t.id), name: t.name, state: t.state }));
+    // Prefer GDB's reported current-thread-id (the stopped thread) over guessing tinfo[0].
     out.threads = tinfo;
-    if (tinfo.length > 0) out.threadId = tinfo[0].id;
+    if (currentThreadId !== undefined) out.threadId = currentThreadId;
+    else if (tinfo.length > 0) out.threadId = tinfo[0].id;
 
     try {
       const frames = await s.gdb.sendCommand('-stack-list-frames 0 20');

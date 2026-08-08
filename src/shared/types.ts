@@ -20,7 +20,7 @@ export interface CliOutput {
   code?: 'CONNECTION' | 'AUTH' | 'TIMEOUT' | 'BINARY' | 'SESSION' | 'PTRACE';
   hint?: string;
   status?: 'stopped' | 'running' | 'exited';
-  reason?: 'breakpoint-hit' | 'end-stepping-range' | 'signal-received' | 'entry';
+  reason?: 'breakpoint-hit' | 'end-stepping-range' | 'signal-received' | 'entry' | 'exited' | 'exited-normally' | 'exited-signalled';
   file?: string;
   line?: number;
   pid?: number;
@@ -32,6 +32,21 @@ export interface CliOutput {
   breakpoints?: BreakpointInfo[];
   watchpoints?: WatchpointInfo[];
   context?: SourceLine[];
+}
+
+/** Structured parse of a GDB/MI `*stopped` async record. */
+export interface StopRecord {
+  /** Global thread id of the thread that directly caused the stop. */
+  threadId?: number;
+  reason?: string;
+  /** Breakpoint number for `reason="breakpoint-hit"`. */
+  bkptno?: string;
+  exitCode?: string;
+  /** Non-stop: the threads that stopped; all-stop: `["all"]`. */
+  stoppedThreads?: string[];
+  frame?: { func?: string; file?: string; fullname?: string; line?: number };
+  /** The raw MI record string, preserved for debugging. */
+  raw: string;
 }
 
 export interface ThreadInfo { id: number; name: string; state: string }

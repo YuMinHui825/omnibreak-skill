@@ -40,13 +40,12 @@ omnibreak stop
 sudo apt install -y gdbserver gdb-multiarch
 ```
 
-> **Known GDB limitation (multi-threaded breakpoints):** a breakpoint on a line shared by
-> several threads stops once per thread, then goes inert — GDB's all-stop step-over does not
-> re-evaluate a condition that was false on the first hit. Verified identical on GDB 12.1 and
-> GDB 17.2 (software/hardware breakpoints, `-O0`/`-Og`, host/target eval, non-stop). It is a GDB
-> `infrun` limitation, not an OmniBreak bug — `--condition` works on single-threaded programs.
-> Workaround: break at a less-contended line (break once, inspect, `continue` manually) or use
-> a watchpoint.
+> **Breakpoint line placement (verified):** a breakpoint on a **loop-header / loop-back edge**
+> line (e.g. a `for` condition line) fires once per thread, then goes inert — GDB's step-over
+> interacts with the loop-back edge, on GDB 12.1 and 17.2, all-stop and non-stop, and on
+> single-threaded programs too (not a multi-threading limitation). On a statement line inside
+> the loop body, breakpoints — including `--condition` — re-trigger reliably on every thread.
+> Rule of thumb: break inside the loop body, not on the `for`/`while` header line.
 
 ### Language Support
 | Language | Support | Notes |
@@ -194,6 +193,8 @@ omnibreak launch --target <IP|local|docker://<ctr>> --binary <PATH>
   --gdbserver-path <path> gdbserver binary on target (default: gdbserver from PATH)
   --env <key=value>      Set an env var in the inferior (repeatable)
   --args <value>         Pass an arg to the inferior (repeatable)
+  --follow-fork-mode <mode>  Across fork(): follow parent or child (parent|child)
+  --detach-on-fork <mode>    Keep both processes after fork; off = debug the child (on|off)
 ```
 
 > **Local debugging:** `--target local` runs the debugger on this machine (no SSH).
@@ -210,6 +211,8 @@ omnibreak attach --target <IP> --process <name>|--pid <n>
   --deploy-source <path> Local binary to SCP before attach
   --pwd <pass>           SSH password (for scp, gdbserver, and GDB)
   --sudo                 Use sudo for gdbserver commands
+  --follow-fork-mode <mode>  Across fork(): follow parent or child (parent|child)
+  --detach-on-fork <mode>    Keep both processes after fork; off = debug the child (on|off)
 ```
 
 ### Trace Options

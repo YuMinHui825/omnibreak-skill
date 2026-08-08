@@ -1,4 +1,4 @@
-import { parseThreadInfo, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint, extractMiString, unescapeMiString } from '../../src/debug/parser';
+import { parseThreadInfo, parseThreadInfoWithCurrent, parseFrames, parseVariables, parseBreakpoint, parseWatchpoint, parseStopRecord, extractMiString, unescapeMiString } from '../../src/debug/parser';
 
 describe('gdbMiParser', () => {
   describe('parseThreadInfo', () => {
@@ -127,6 +127,60 @@ describe('gdbMiParser', () => {
       const threads = parseThreadInfo(input);
       expect(threads).toHaveLength(2);
       expect(threads[0].name).toBe('main thread');
+    });
+  });
+
+  describe('parseStopRecord', () => {
+    it('parses breakpoint-hit with thread-id and frame', () => {
+      const input = '*stopped,reason="breakpoint-hit",thread-id="2",bkptno="1",frame={func="worker",file="multithread.c",fullname="/tmp/example/src/multithread.c",line="17"}';
+      const r = parseStopRecord(input);
+      expect(r.threadId).toBe(2);
+      expect(r.reason).toBe('breakpoint-hit');
+      expect(r.bkptno).toBe('1');
+      expect(r.frame?.func).toBe('worker');
+      expect(r.frame?.line).toBe(17);
+      expect(r.raw).toBe(input);
+    });
+
+    it('parses exit record with exit-code but no thread/frame', () => {
+      const r = parseStopRecord('*stopped,reason="exited",exit-code="0"');
+      expect(r.reason).toBe('exited');
+      expect(r.exitCode).toBe('0');
+      expect(r.threadId).toBeUndefined();
+      expect(r.frame).toBeUndefined();
+    });
+
+    it('does not read `stopped-threads` as the thread-id', () => {
+      const r = parseStopRecord('*stopped,reason="breakpoint-hit",stopped-threads="all",thread-id="1"');
+      expect(r.threadId).toBe(1);
+      expect(r.stoppedThreads).toEqual(['all']);
+    });
+
+    it('parses frame with nested args (greedy to the closing brace)', () => {
+      const input = '*stopped,reason="breakpoint-hit",thread-id="2",frame={level="0",func="worker",args=[{name="arg",value="0x1"}],line="18"}';
+      const r = parseStopRecord(input);
+      expect(r.threadId).toBe(2);
+      expect(r.frame?.line).toBe(18);
+      expect(r.frame?.func).toBe('worker');
+    });
+
+    it('passes through an already-structured StopRecord', () => {
+      const structured = { threadId: 3, reason: 'breakpoint-hit', raw: '*stopped,...' };
+      expect(parseStopRecord(structured)).toBe(structured);
+    });
+  });
+
+  describe('parseThreadInfoWithCurrent', () => {
+    it('returns current-thread-id', () => {
+      const { threads, currentThreadId } = parseThreadInfoWithCurrent('done,threads=[{id="1"},{id="2"}],current-thread-id="2"');
+      expect(threads).toHaveLength(2);
+      expect(currentThreadId).toBe(2);
+    });
+
+    it('handles a missing current-thread-id', () => {
+      const { threads, currentThreadId } = parseThreadInfoWithCurrent('done,threads=[{id="1"}]');
+      expect(threads).toHaveLength(1);
+      expect(currentThreadId).toBeUndefined();
     });
   });
 });

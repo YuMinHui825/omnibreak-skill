@@ -50,16 +50,16 @@ Before starting, ask the user for anything missing:
    `gdbserver` is required for remote (and local) sessions. The `launch`/`attach` commands start it automatically — you only need to install it.
    Session cleanup kills gdbserver by PID via `pgrep`/`kill` (from `procps`, bundled with `ps`) — no `psmisc`/`fuser` required.
 
-   **Known GDB limitation (verified):** a breakpoint on a line shared by several threads only
-   stops once per thread, then goes inert — GDB's all-stop step-over (stop all → remove SWBP →
-   single-step → reinsert → resume) deduplicates repeated hits on the same PC and does not
-   re-evaluate a condition that was false on the first hit. Verified identical on GDB 12.1
-   (Ubuntu default) and GDB 17.2 (built from source), with software/hardware breakpoints,
-   `-O0`/`-Og`, host- and target-side condition evaluation, and non-stop mode. This is a GDB
-   `infrun` limitation (the community is still fixing related step-over bugs in 2026), not an
-   OmniBreak bug — `--condition` itself is MI-correct and works on single-threaded programs.
-   Workarounds: break at a less-contended line (break once, inspect state, then `continue`
-   manually), or use a watchpoint.
+   **Breakpoint line placement matters (verified):** a breakpoint on a **loop-header /
+   loop-back edge** line (e.g. the `for (int i = 0; i < n; i++)` condition line) fires only
+   **once per thread** and then goes inert — GDB's step-over interacts with the loop-back edge
+   re-landing on the breakpoint address, and the hit is consumed. Verified identical on GDB
+   12.1 and 17.2, `-O0`/`-Og`, software/hardware breakpoints, all-stop and non-stop, and on a
+   **single-threaded** program too (so it is *not* a multi-threading limitation). On a normal
+   statement line **inside** the loop body, breakpoints — including conditional ones
+   (`--condition "i == 2"`) — re-trigger reliably on every pass, on every thread.
+   **Rule of thumb:** break on a line inside the loop body / after the loop condition, not on
+   the `for`/`while` header line itself.
    `--gdb-path` / `--gdbserver-path` still let you point at any GDB build on the target.
 2. **On the dev machine** — install this skill:
    ```bash
@@ -103,10 +103,9 @@ omnibreak attach  --target <IP> --process <NAME>|--pid <N>
                   [--binary <PATH>] [--pwd <pass>] [--sudo]
 
 omnibreak break   --file <PATH> --line <N> [--condition "x>100"] [--session ID]
-                  # NOTE: single-threaded programs → conditions are reliable. Multi-threaded
-                  # targets → GDB may stop only once per thread on a shared breakpoint and never
-                  # re-evaluate a condition that was false on the first hit
-                  # (see Install → Known GDB limitation).
+                  # NOTE: conditions are reliable on any thread. Avoid breaking on loop-header
+                  # lines (e.g. a `for` condition) — that fires once then goes inert. Break on a
+                  # line inside the loop body instead (see Install → Breakpoint line placement).
 omnibreak watch   --expr <VAR> [--type write|read|access] [--session ID]
 omnibreak continue | c        Resume — auto-returns status [--session ID]
 omnibreak next    | n         Step over — auto-returns status [--session ID]
@@ -193,6 +192,15 @@ health → "N session(s) active"
 break --file svc1.c --line 42 --session 1
 continue --session 2
 ```
+
+**Forked child:** to debug the process created by `fork()`:
+```
+launch --binary /app/svc --follow-fork-mode child --detach-on-fork off
+break --file svc.c --line 42        # break inside the child's code path
+continue                            # stops in the child (fork() returned 0)
+```
+`--follow-fork-mode parent|child` picks which side the debugger follows; `--detach-on-fork off`
+keeps BOTH processes under GDB — the other side becomes a second (stopped) inferior.
 
 ## Output Format
 

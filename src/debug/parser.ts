@@ -1,4 +1,4 @@
-import { MiResult, MiAsyncRecord } from '../shared/types';
+import { MiResult, MiAsyncRecord, StopRecord } from '../shared/types';
 
 type RecordCallback = (record: MiAsyncRecord) => void;
 type ResultCallback = (result: MiResult) => void;
@@ -77,6 +77,34 @@ export function extractMiString(data: string, key: string): string | undefined {
 }
 
 /**
+ * Parse a GDB/MI `*stopped` async record into a structured StopRecord. Accepts either the
+ * raw record string (pre-Structured-event clients) or an already-structured StopRecord
+ * (pass-through), so it works before and after the client event-payload change.
+ */
+export function parseStopRecord(data: string | StopRecord): StopRecord {
+  if (typeof data !== 'string') return data;
+  const tid = extractMiString(data, 'thread-id');          // exact key; won't match "stopped-threads"
+  // Frame is typically the last field; greedy match lands on its closing `}`.
+  const frameMatch = data.match(/frame=\{(.*)\}(?:,|$)/);
+  const frame = frameMatch ? parseMiFields(frameMatch[1]) : {};
+  const stoppedThreadsRaw = extractMiString(data, 'stopped-threads');
+  return {
+    threadId: tid !== undefined && /^\d+$/.test(tid) ? parseInt(tid, 10) : undefined,
+    reason: extractMiString(data, 'reason'),
+    bkptno: extractMiString(data, 'bkptno'),
+    exitCode: extractMiString(data, 'exit-code'),
+    stoppedThreads: stoppedThreadsRaw
+      ? (stoppedThreadsRaw === 'all' ? ['all'] : stoppedThreadsRaw.match(/"(\d+)"/g)?.map(x => x.replace(/"/g, '')))
+      : undefined,
+    frame: frame['line'] !== undefined ? {
+      func: frame['func'], file: frame['file'], fullname: frame['fullname'],
+      line: parseInt(frame['line'], 10),
+    } : undefined,
+    raw: data,
+  };
+}
+
+/**
  * Split MI tuple fields at the top level (`key=value,key=value,...`), respecting quoted
  * strings (with `\"` escapes) and nested `{...}` / `[...]`. The old `str.split(',')`
  * truncated values containing commas (e.g. C++ template funcs, conditions, list values).
@@ -127,10 +155,17 @@ export function parseWatchpoint(data: string): Record<string, string> {
   return m ? parseMiFields(m[1]) : {};
 }
 
-export function parseThreadInfo(data: string): Array<{ id: string; name: string; state: string }> {
+/** Parse `-thread-info` into a thread list plus the `current-thread-id` (all-stop: the stopped thread). */
+export function parseThreadInfoWithCurrent(data: string): {
+  threads: Array<{ id: string; name: string; state: string }>;
+  currentThreadId?: number;
+} {
   const threads: Array<{ id: string; name: string; state: string }> = [];
-  const match = data.match(/^done,threads=\[(.*)\],current-thread-id=/);
+  let currentThreadId: number | undefined;
+  // Thread tuples never contain `]`, so non-greedy to the first `]` is safe; current-thread-id is optional.
+  const match = data.match(/^done,threads=\[(.*?)\](?:,current-thread-id="(\d+)")?/);
   if (match) {
+    if (match[2]) currentThreadId = parseInt(match[2], 10);
     for (const part of splitMiFields(match[1])) {
       const props = parseMiFields(part.trim().replace(/^\{|\}$/g, ''));
       if (props['id']) {
@@ -138,7 +173,11 @@ export function parseThreadInfo(data: string): Array<{ id: string; name: string;
       }
     }
   }
-  return threads;
+  return { threads, currentThreadId };
+}
+
+export function parseThreadInfo(data: string): Array<{ id: string; name: string; state: string }> {
+  return parseThreadInfoWithCurrent(data).threads;
 }
 
 export function parseFrames(data: string): Array<Record<string, string>> {

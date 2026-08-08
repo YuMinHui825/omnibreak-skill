@@ -40,12 +40,12 @@ omnibreak stop
 sudo apt install -y gdbserver gdb-multiarch
 ```
 
-> **已知 GDB 限制（多线程断点，已实测验证）：** 位于多线程共享代码行上的断点，每个线程
-> 只触发一次后即失效 — GDB 的 all-stop step-over 机制不会重新求值「首次命中时为 false」
-> 的条件。实测在 GDB 12.1 和 17.2（源码编译）上行为完全一致：软/硬件断点、`-O0`/`-Og`、
-> 宿主机/目标机条件求值、non-stop 模式均相同。这是 GDB `infrun` 层的限制，不是 OmniBreak
-> 的 bug —— `--condition` 本身 MI 构造正确，单线程程序上可靠工作。
-> 变通方案：在低频命中的代码行下断点（只停一次、检查状态、手动 `continue`），或改用 watchpoint。
+> **断点行位置很重要（已实测验证）：** 断点设在**循环头/回跳边**行（如 `for` 条件行）时，
+> 每个线程只触发一次即失效 — GDB 的 step-over 与循环回跳边交互导致命中被吞掉。实测 GDB
+> 12.1 和 17.2、`-O0`/`-Og`、软/硬件断点、all-stop 与 non-stop、以及**单线程**程序上都一致
+> （所以这不是多线程限制）。断点设在循环体内部的普通语句行上时，包括 `--condition`
+> 条件断点在内，每个线程每次都可靠重触发。
+> 经验法则：断点下在循环体内部 / 循环条件之后，不要下在 `for`/`while` 头行上。
 
 ### 语言支持
 | 语言 | 支持程度 | 说明 |
@@ -192,6 +192,8 @@ omnibreak launch --target <IP|local|docker://<容器>> --binary <PATH>
   --gdbserver-path <path> 目标机 gdbserver 二进制（默认 PATH 里的 gdbserver）
   --env <key=value>      给被调试程序设置环境变量（可重复）
   --args <value>         给被调试程序传参（可重复）
+  --follow-fork-mode <mode>  fork() 时跟随父或子进程（parent|child）
+  --detach-on-fork <mode>    fork 后是否保留两侧；off = 调试子进程（on|off）
 ```
 
 > **本地调试：** `--target local` 在本机直接调试（不走 SSH）。launch/attach/break/watch/status/stats/leaks/diff 均可用；
@@ -207,6 +209,8 @@ omnibreak attach --target <IP> --process <name>|--pid <n>
   --deploy-source <path> 本地二进制，attach 前自动 SCP
   --pwd <pass>           SSH 密码（scp、gdbserver、GDB 通用）
   --sudo                 使用 sudo 执行 gdbserver 命令
+  --follow-fork-mode <mode>  fork() 时跟随父或子进程（parent|child）
+  --detach-on-fork <mode>    fork 后是否保留两侧；off = 调试子进程（on|off）
 ```
 
 ### Trace 选项
@@ -447,6 +451,19 @@ omnibreak health  # → "daemon running, 2 session(s) active"
 
 # --session 指定操作哪个
 omnibreak break --file handler.cpp --line 42 --session 1
+```
+
+**调试 fork() 出的子进程**：
+
+```bash
+# follow 子进程并保持父进程（成为第二个 stopped inferior）
+omnibreak launch --binary /app/svc --follow-fork-mode child --detach-on-fork off
+omnibreak break --file svc.c --line 42     # 断在子进程代码路径里
+omnibreak continue                         # 停在子进程（fork() 返回 0）
+```
+
+`--follow-fork-mode parent|child` 选择调试器跟随哪一侧；`--detach-on-fork off`
+让两侧都保留在 GDB 控制下（另一侧成为被暂停的第二个 inferior）。
 omnibreak continue --session 2
 
 # 停止单个或全部
