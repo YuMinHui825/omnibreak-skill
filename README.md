@@ -1,3 +1,5 @@
+
+
 <p align="center"><img src="icon.png" width="128" alt="OmniBreak" /></p>
 
 # OmniBreak Skill
@@ -22,7 +24,7 @@ Works with the same GDB/MI engine as [OmniBreak VSCode Extension](https://github
 
 ```
 omnibreak daemon &          # Background daemon holds GDB connection (TCP 127.0.0.1:49200)
-omnibreak launch ...        # All commands talk to daemon via TCP
+omnibreak launch ...        # Debug commands talk to daemon via TCP
 omnibreak break ...
 omnibreak continue ...      # Returns full status: threads, frames, variables
 omnibreak status ...        # Returns JSON: threads, frames, variables
@@ -150,7 +152,7 @@ omnibreak stop
 ## All Commands
 
 | Command | Description |
-|------|------|
+|------|-------|
 | `daemon` | Start background daemon (required before other commands) |
 | `launch` | Deploy + start binary on target (`--target IP\|local\|docker://<ctr>`) |
 | `attach` | Attach to a running process |
