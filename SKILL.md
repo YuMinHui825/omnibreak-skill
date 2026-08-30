@@ -146,9 +146,14 @@ omnibreak leaks --pid <N> --target <IP> [--user root] [--pwd <pass>]
 ```
 omnibreak trace --target <IP> [--duration 10] [--sudo] [--pwd <pass>]
                 [--start-cmd <cmd>] [--heap-profile <proc>]
-    → {output: "./trace.pftrace", sizeBytes, summary: {top_cpu_threads,
-       thread_states, io_wait, scheduling_latency, perf_top_functions}}
+    → {output: "./trace.pftrace", sizeBytes,
+       summary: {top_cpu_threads, thread_states, io_wait, scheduling_latency,
+                 blocked_function, page_fault, block_io_issue, file_io_cache, ...},
+       hints: ["线程「main」在 D 状态阻塞 3.2s，blocked_function=page_cache_readahead — 建议…"]}
     Auto-detects GPU events. 100Hz CPU flame graphs. Opens in ui.perfetto.dev.
+    Capture includes sched_blocked_reason (D-state cause), block_rq_issue (I/O size),
+    filemap_add_to_page_cache (which file), and power/cpu_frequency. The summary and
+    `hints` turn trace data into actionable I/O recommendations.
 ```
 
 ### Utility

@@ -59,40 +59,71 @@ const GPU_PROBES = {
     lima: 'lima/lima_submit',
     drm: 'drm/drm_vblank_event',
 };
-/** Detect available GPU ftrace events on the remote target */
-function detectGpuEvents(c, sudo, sudoPwd) {
-    const events = [];
+/**
+ * Probe which `subsystem/event` ftrace tracepoints exist on the target kernel in a single
+ * SSH round-trip. Used to enable only the I/O/GPU events the kernel actually supports.
+ */
+function probeAvailableEvents(c, sudo, sudoPwd) {
+    const present = new Set();
+    // Raw `sshExec` would let the LOCAL shell (execSync → /bin/sh) re-expand `${d%/}`,
+    // `"$s/$e"` etc. from the script before it ever reaches ssh — silently emptying the
+    // variable expressions and returning garbage. `sshExecSafe` base64-encodes the whole
+    // command end-to-end, so the script is decoded verbatim on the target. Run through
+    // `sudo -S` only when asked (tracefs event listing usually works unprivileged).
+    const script = 'for d in /sys/kernel/tracing/events/*/; do s=${d%/}; s=${s##*/}; ' +
+        'for e in "${d}"*/; do e=${e%/}; e=${e##*/}; echo "$s/$e"; done; done';
+    const cmd = sudo
+        ? `echo '${sudoPwd ? escSh(sudoPwd) : ''}' | sudo -S sh -c '${script}' 2>/dev/null`
+        : script;
     try {
-        let cmd = `"ls /sys/kernel/tracing/events/ 2>/dev/null"`;
-        if (sudo && sudoPwd) {
-            cmd = `"echo '${escSh(sudoPwd)}' | sudo -S ls /sys/kernel/tracing/events/ 2>/dev/null"`;
-        }
-        else if (sudo) {
-            cmd = `"sudo ls /sys/kernel/tracing/events/ 2>/dev/null"`;
-        }
-        const ls = (0, ssh_1.sshExec)(c, cmd);
-        const dirs = ls.split('\n').map(s => s.trim()).filter(Boolean);
-        for (const [dir, event] of Object.entries(GPU_PROBES)) {
-            if (dirs.includes(dir)) {
-                events.push(event);
-                (0, types_1.log)('info', `Detected GPU: ${dir} (${event})`);
-            }
+        const out = (0, ssh_1.sshExecSafe)(c, cmd);
+        for (const line of out.split('\n')) {
+            const t = line.trim();
+            if (t)
+                present.add(t);
         }
     }
-    catch { }
+    catch (err) {
+        (0, types_1.log)('info', `Event probe failed: ${err.message}`);
+    }
+    return present;
+}
+/** Detect available GPU ftrace events on the remote target */
+function detectGpuEvents(present) {
+    const events = [];
+    for (const [dir, event] of Object.entries(GPU_PROBES)) {
+        if (present.has(dir) || present.has(event)) {
+            events.push(event);
+            (0, types_1.log)('info', `Detected GPU: ${dir} (${event})`);
+        }
+    }
     return events;
 }
+/** Default ftrace events: scheduling + process lifecycle. `sched_blocked_reason` (populates
+ * `thread_state.blocked_function`) and the I/O events are probed for availability and appended
+ * at capture time — some kernels (e.g. 5.15) lack sched_blocked_reason or name the page-cache
+ * event `mm_filemap_add_to_page_cache` instead of `filemap_add_to_page_cache`. */
+const DEFAULT_EVENTS = 'sched/sched_switch sched/sched_waking sched/sched_wakeup sched/sched_process_exec ' +
+    'sched/sched_process_fork sched/sched_process_exit sched/sched_wakeup_new ' +
+    'power/cpu_frequency power/cpu_idle';
+/** Optional I/O-analysis events — enabled only when present on the target kernel. */
+const IO_EVENT_CANDIDATES = [
+    'sched/sched_blocked_reason', // D-state cause (blocked_function)
+    'block/block_rq_issue', // block request size / mix
+    'filemap/filemap_add_to_page_cache', 'filemap/mm_filemap_add_to_page_cache', // file behind I/O
+];
 /** Build a Perfetto text config that includes ftrace + process snapshot */
 function buildTraceConfig(durationSec, events, heapProfile) {
     const eventList = events.split(' ').filter(e => e).map(e => `      ftrace_events: "${e}"`).join('\n');
+    // RING_BUFFER + 64MB so 100Hz perf sampling + ftrace don't overflow during long captures.
     const parts = [
-        'buffers { size_kb: 4096 }',
+        'buffers { size_kb: 65536 fill_policy: RING_BUFFER }',
         'data_sources {',
         '  config {',
         '    name: "linux.ftrace"',
         '    ftrace_config {',
         eventList,
-        '      buffer_size_kb: 2048',
+        '      buffer_size_kb: 4096',
         '    }',
         '  }',
         '}',
@@ -100,8 +131,8 @@ function buildTraceConfig(durationSec, events, heapProfile) {
         '  config {',
         '    name: "linux.perf"',
         '    perf_event_config {',
-        '      all_cpus: true',
-        '      sampling_frequency: 100',
+        '      timebase { frequency: 100 }',
+        '      callstack_sampling { scope { } }',
         '    }',
         '  }',
         '}',
@@ -193,6 +224,34 @@ const SUMMARY_SQL = {
         "FROM sched JOIN thread ON sched.waker_utid = thread.utid " +
         "WHERE waker_dur > 0 " +
         "GROUP BY sched.waker_utid ORDER BY avg_wakeup_us DESC LIMIT 10",
+    // I/O cause analysis: D-state (uninterruptible sleep) grouped by the kernel function the
+    // thread was blocked in (populated by the sched_blocked_reason ftrace event).
+    blocked_function: "SELECT thread.name, thread_state.blocked_function, " +
+        "SUM(thread_state.dur)/1e6 AS blocked_ms, COUNT(*) AS count " +
+        "FROM thread_state JOIN thread USING (utid) " +
+        "WHERE thread_state.state = 'D' AND thread_state.blocked_function IS NOT NULL " +
+        "GROUP BY thread_state.utid, thread_state.blocked_function " +
+        "ORDER BY blocked_ms DESC LIMIT 15",
+    // Page-fault driven I/O contention (cold-start indicator): blocked on do_page_fault.
+    page_fault: "SELECT thread.name, SUM(thread_state.dur)/1e6 AS pf_ms, COUNT(*) AS count " +
+        "FROM thread_state JOIN thread USING (utid) " +
+        "WHERE thread_state.state = 'D' AND ( " +
+        "  thread_state.blocked_function GLOB 'do_page_fault*' OR " +
+        "  thread_state.blocked_function GLOB 'handle_mm_fault*') " +
+        "GROUP BY thread_state.utid ORDER BY pf_ms DESC LIMIT 10",
+    // Block-layer I/O requests by operation type and size (from block_rq_issue ftrace).
+    block_io_issue: "SELECT EXTRACT_ARG(raw.arg_set_id, 'rwbs') AS op, COUNT(*) AS count, " +
+        "SUM(EXTRACT_ARG(raw.arg_set_id, 'bytes'))/1048576 AS total_mb, " +
+        "AVG(EXTRACT_ARG(raw.arg_set_id, 'nr_sector')) AS avg_sectors " +
+        "FROM raw WHERE raw.name = 'block_rq_issue' " +
+        "GROUP BY op ORDER BY count DESC LIMIT 10",
+    // Page-cache additions by inode — pinpoints the file causing I/O pressure.
+    // GLOB matches both the modern `filemap_add_to_page_cache` and the older
+    // `mm_filemap_add_to_page_cache` event name (kernel ≤ 5.x).
+    file_io_cache: "SELECT EXTRACT_ARG(raw.arg_set_id, 's_dev') AS dev, " +
+        "EXTRACT_ARG(raw.arg_set_id, 'inode') AS inode, COUNT(*) AS count " +
+        "FROM raw WHERE raw.name GLOB '*filemap_add_to_page_cache*' " +
+        "GROUP BY dev, inode ORDER BY count DESC LIMIT 12",
 };
 function ensureTraceProcessor() {
     const paths = [
@@ -208,6 +267,116 @@ function ensureTraceProcessor() {
     (0, types_1.log)('info', 'Downloading trace_processor...');
     (0, child_process_1.execSync)(`curl -fsSL -o "${dest}" https://get.perfetto.dev/trace_processor && chmod +x "${dest}"`, { timeout: 120000 });
     return dest;
+}
+/** Helper: parse "name a b c ..." style result rows into a list of values, joining the
+ * (possibly space-containing) leading name token. */
+function rowValues(row) {
+    return row.trim().split(/\s+/).filter(Boolean);
+}
+function rowName(parts, valueCount) {
+    return parts.slice(0, -valueCount).join(' ') || '?';
+}
+/**
+ * Detect actionable I/O problems from the trace summary and produce concrete
+ * recommendations (mirrors the "hints" model of Google's Perfetto profiler skill):
+ * a specific signal → what it means → what to change in your code.
+ */
+function computeHints(summary) {
+    const hints = [];
+    // 1. D-state with a disk-I/O blocked_function → synchronous read advice.
+    const bf = summary.blocked_function;
+    if (Array.isArray(bf) && bf.length > 0) {
+        const diskSignals = ['page_cache_readahead', 'wait_on_page_bit', 'filemap', 'submit_bio', 'blk_', '_read', '_write'];
+        for (const row of bf.slice(0, 5)) {
+            const p = rowValues(row);
+            if (p.length < 3)
+                continue;
+            const fn = p[p.length - 3];
+            const ms = parseFloat(p[p.length - 2]) || 0;
+            if (ms > 50 && diskSignals.some(k => fn.includes(k))) {
+                hints.push(`线程「${rowName(p, 3)}」在 D 状态（不可中断睡眠）阻塞 ${fmtMs(ms)}，blocked_function=${fn} —— 疑似磁盘同步读。建议：避免关键线程同步读文件，加大读取 buffer，或将读取移到后台线程。`);
+            }
+        }
+    }
+    // 2. Heavy page-fault blocking → cold-start / I/O contention.
+    const pf = summary.page_fault;
+    if (Array.isArray(pf) && pf.length > 0) {
+        const p = rowValues(pf[0]);
+        if (p.length >= 2) {
+            const ms = parseFloat(p[p.length - 2]) || 0;
+            if (ms > 200) {
+                hints.push(`执行路径缺页等待 ${fmtMs(ms)} —— 代码页/文件页不在内存（冷启动特征）。建议：减少启动路径上的文件访问、大文件扫描和延迟加载不必要模块。`);
+            }
+        }
+    }
+    // 3. Block I/O dominated by small requests → fragmented reads.
+    const bio = summary.block_io_issue;
+    if (Array.isArray(bio) && bio.length > 0) {
+        for (const row of bio.slice(0, 3)) {
+            const p = rowValues(row);
+            if (p.length < 4)
+                continue;
+            const count = parseInt(p[1]) || 0;
+            const avgSectors = parseFloat(p[3]) || 0;
+            if (avgSectors > 0 && avgSectors < 16 && count > 100) {
+                hints.push(`检测到 ${count} 次小块 I/O（平均 ${avgSectors} 扇区 ≈ ${(avgSectors * 512 / 1024).toFixed(0)}KB，op=${p[0]}）—— 小缓冲碎读会把 I/O 打满。建议：加大读取 buffer 或用大块顺序读。`);
+            }
+        }
+    }
+    // 4. D-state present but blocked_function missing → recording gap.
+    const ioWait = summary.io_wait;
+    if (Array.isArray(ioWait) && ioWait.length > 0 && (!Array.isArray(bf) || bf.length === 0)) {
+        hints.push('检测到 D 状态但未捕获 blocked_function —— 本次 trace 可能缺少 sched/sched_blocked_reason 事件，无法判断阻塞类型。建议补录该事件后重试。');
+    }
+    return hints;
+}
+/**
+ * Ensure a WORKING tracebox binary exists on the remote target. `get.perfetto.dev/tracebox`
+ * returns a small python launcher that downloads the real binary from Google's storage on
+ * first run — which fails on targets that can't reach that CDN. So after grabbing the
+ * launcher we force the real download, and fall back to the GitHub release (reachable on
+ * most networks) when the official CDN is blocked.
+ */
+function ensureTracebox(c) {
+    // Already a real binary? (--version returns something like "tracebox v58.2 ...").
+    try {
+        const out = (0, ssh_1.sshExec)(c, `"${REMOTE_TRACEBOX} --version 2>&1 | tail -1"`);
+        if (/v?\d+\.\d+/.test(out) || out.toLowerCase().includes('tracebox'))
+            return;
+    }
+    catch { }
+    try {
+        (0, types_1.log)('info', 'Downloading tracebox (get.perfetto.dev)...');
+        (0, ssh_1.sshExec)(c, `"curl -fsSL -o ${REMOTE_TRACEBOX} https://get.perfetto.dev/tracebox && chmod +x ${REMOTE_TRACEBOX}"`);
+        // Force the launcher to fetch the real binary; allow a long first-run download.
+        sshExecLong(c, `"${REMOTE_TRACEBOX} --version"`, 240000);
+        return;
+    }
+    catch { }
+    (0, types_1.log)('info', 'Official tracebox download failed — falling back to GitHub release...');
+    const arch = `$(uname -m | grep -q aarch64 && echo arm64 || echo amd64)`;
+    const cmd = `cd /tmp && rm -f perfetto-rel.zip && ` +
+        `curl -fsSL --retry 2 -o perfetto-rel.zip https://github.com/google/perfetto/releases/download/v58.2/linux-${arch}.zip && ` +
+        `(unzip -o -q perfetto-rel.zip -d perfetto-rel 2>/dev/null || python3 -c "import zipfile;zipfile.ZipFile('perfetto-rel.zip').extractall('perfetto-rel')") && ` +
+        `find perfetto-rel -name tracebox -exec cp {} ${REMOTE_TRACEBOX} \\; && chmod +x ${REMOTE_TRACEBOX} && ` +
+        `rm -rf perfetto-rel perfetto-rel.zip`;
+    sshExecLong(c, `"${cmd}"`, 300000);
+}
+/** Parse the tabular stdout of a trace_processor query into trimmed rows (skip header/blank). */
+function parseQueryRows(out) {
+    const rows = [];
+    let started = false;
+    for (const line of out.split('\n')) {
+        if (line.startsWith('Query executed') || line.startsWith('Error'))
+            continue;
+        if (!started && line.includes('---')) {
+            started = true;
+            continue;
+        }
+        if (started && line.trim())
+            rows.push(line.trim());
+    }
+    return rows;
 }
 /** Render trace summary into AI-friendly natural language text */
 function renderTraceNarrative(summary) {
@@ -399,37 +568,112 @@ function renderTraceNarrative(summary) {
             });
         }
     }
+    // Blocked-function breakdown — WHY threads sat in D state (disk? page fault? other).
+    if (summary.blocked_function && Array.isArray(summary.blocked_function)) {
+        const rows = summary.blocked_function;
+        if (rows.length > 0) {
+            lines.push('\n=== D-state Blocked On ===');
+            rows.slice(0, 8).forEach(r => {
+                const p = rowValues(r);
+                if (p.length >= 3) {
+                    const fn = p[p.length - 3];
+                    const ms = parseFloat(p[p.length - 2]) || 0;
+                    const count = p[p.length - 1];
+                    const name = rowName(p, 3);
+                    const label = fn.includes('do_page_fault') ? 'page-fault (cold start)' : fn;
+                    lines.push(`  ${name}: ${fmtMs(ms)} in ${count} blocks @ ${label}`);
+                }
+            });
+        }
+    }
+    // Page-fault driven I/O contention.
+    if (summary.page_fault && Array.isArray(summary.page_fault)) {
+        const rows = summary.page_fault;
+        if (rows.length > 0) {
+            lines.push('\n=== Page-Fault I/O ===');
+            rows.slice(0, 5).forEach(r => {
+                const p = rowValues(r);
+                if (p.length >= 2) {
+                    lines.push(`  ${rowName(p, 2)}: ${fmtMs(parseFloat(p[p.length - 2]) || 0)} page-fault wait (${p[p.length - 1]} events)`);
+                }
+            });
+        }
+    }
+    // Block-layer request mix — operation type, total bytes, average size.
+    if (summary.block_io_issue && Array.isArray(summary.block_io_issue)) {
+        const rows = summary.block_io_issue;
+        if (rows.length > 0) {
+            lines.push('\n=== Block I/O Requests ===');
+            rows.slice(0, 6).forEach(r => {
+                const p = rowValues(r);
+                if (p.length >= 4) {
+                    const op = p[0], count = p[1], mb = parseFloat(p[2]) || 0, avg = parseFloat(p[3]) || 0;
+                    lines.push(`  ${op}: ${count} reqs, ${mb.toFixed(1)}MB total, avg ${(avg * 512 / 1024).toFixed(0)}KB`);
+                }
+            });
+        }
+    }
+    // Page-cache additions by inode — which file is being read into memory.
+    if (summary.file_io_cache && Array.isArray(summary.file_io_cache)) {
+        const rows = summary.file_io_cache;
+        if (rows.length > 0) {
+            lines.push('\n=== Files Entering Page Cache ===');
+            rows.slice(0, 6).forEach(r => {
+                const p = rowValues(r);
+                if (p.length >= 3) {
+                    lines.push(`  dev=${p[0]} inode=${p[1]}: ${p[2]} page-cache additions`);
+                }
+            });
+        }
+    }
+    // Actionable hints (computed last so all sections above are available).
+    const hints = computeHints(summary);
+    if (hints.length > 0) {
+        lines.push('\n=== Recommendations ===');
+        hints.forEach(h => lines.push(`  ▸ ${h}`));
+    }
     return lines.join('\n') || 'No significant findings in this trace.';
+}
+function fmtMs(ms) {
+    return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms.toFixed(0)}ms`;
 }
 function runTraceSummary(traceFile) {
     const summary = {};
     try {
         const tp = ensureTraceProcessor();
-        for (const [key, sql] of Object.entries(SUMMARY_SQL)) {
-            try {
-                const b64 = Buffer.from(sql).toString('base64');
-                // base64 --decode works on both Linux and macOS (base64 -d is Linux-only)
-                const out = (0, child_process_1.execSync)(`echo ${b64} | base64 --decode | ${tp} "${traceFile}" 2>/dev/null`, {
-                    encoding: 'utf8', timeout: 30000, maxBuffer: 10 * 1024 * 1024, shell: '/bin/bash',
-                });
-                const lines = out.trim().split('\n');
-                let started = false;
-                const rows = [];
-                for (const line of lines) {
-                    if (line.startsWith('Query executed') || line.startsWith('Error'))
-                        continue;
-                    if (!started && line.includes('---')) {
-                        started = true;
-                        continue;
-                    }
-                    if (started && line.trim())
-                        rows.push(line.trim());
+        // Prefer a shared background session (parses the trace once, then every query is fast)
+        // — supported by trace_processor ≥ v58 (server unix). Fall back to per-query parsing.
+        const sessionName = `omnibreak_${path.basename(traceFile).replace(/[^A-Za-z0-9_-]/g, '_')}`;
+        let session = false;
+        try {
+            (0, child_process_1.execSync)(`"${tp}" server unix --name "${sessionName}" --daemonize "${traceFile}"`, { stdio: 'ignore', timeout: 60000 });
+            session = true;
+        }
+        catch { }
+        try {
+            for (const [key, sql] of Object.entries(SUMMARY_SQL)) {
+                try {
+                    const b64 = Buffer.from(sql).toString('base64');
+                    // base64 --decode works on both Linux and macOS (base64 -d is Linux-only)
+                    const q = session
+                        ? `echo ${b64} | base64 --decode | "${tp}" query --remote "${sessionName}" 2>/dev/null`
+                        : `echo ${b64} | base64 --decode | "${tp}" "${traceFile}" 2>/dev/null`;
+                    const out = (0, child_process_1.execSync)(q, { encoding: 'utf8', timeout: 30000, maxBuffer: 10 * 1024 * 1024, shell: '/bin/bash' });
+                    const rows = parseQueryRows(out);
+                    if (rows.length > 0)
+                        summary[key] = rows;
                 }
-                if (rows.length > 0)
-                    summary[key] = rows;
+                catch {
+                    summary[key] = null;
+                }
             }
-            catch {
-                summary[key] = null;
+        }
+        finally {
+            if (session) {
+                try {
+                    (0, child_process_1.execSync)(`"${tp}" server kill "${sessionName}"`, { stdio: 'ignore', timeout: 15000 });
+                }
+                catch { }
             }
         }
     }
@@ -505,29 +749,26 @@ function scpPull(c, remote, local) {
 }
 /** Capture a Perfetto trace from the remote target. Deploys tracebox if needed. */
 function traceCapture(c, opts) {
-    // Step 1: Ensure tracebox exists on remote
-    let exists = false;
-    try {
-        const out = (0, ssh_1.sshExec)(c, `"test -x ${REMOTE_TRACEBOX} && echo yes || echo no"`);
-        exists = out.includes('yes');
-    }
-    catch { }
-    if (!exists) {
-        (0, types_1.log)('info', 'Downloading tracebox on remote (first time, ~20MB)...');
-        sshExecLong(c, `"curl -fsSL -o ${REMOTE_TRACEBOX} https://get.perfetto.dev/tracebox && chmod +x ${REMOTE_TRACEBOX}"`, 120000);
-        (0, types_1.log)('info', 'tracebox downloaded on remote');
-    }
-    // Step 2: Auto-detect GPU events on remote
-    let gpuEvents = [];
+    // Step 1: Ensure a working tracebox exists on remote (official CDN → GitHub fallback)
+    ensureTracebox(c);
+    // Step 2: Probe which events the kernel supports, then assemble the event list
+    // (base scheduling events always; GPU + I/O-analysis events only when present).
+    let events = opts.events || DEFAULT_EVENTS;
     if (!opts.events) {
-        gpuEvents = detectGpuEvents(c, !!opts.sudo, opts.sudoPwd);
+        const present = probeAvailableEvents(c, !!opts.sudo, opts.sudoPwd);
+        const extra = [
+            ...detectGpuEvents(present),
+            ...IO_EVENT_CANDIDATES.filter(e => present.has(e)),
+        ];
+        if (extra.length > 0) {
+            events += ' ' + extra.join(' ');
+            (0, types_1.log)('info', `Including kernel events: ${extra.join(' ')}`);
+        }
+        if (!present.has('sched/sched_blocked_reason')) {
+            (0, types_1.log)('info', 'Kernel lacks sched_blocked_reason — D-state cause (blocked_function) will be unavailable.');
+        }
     }
     // Step 3: Write trace config to remote (via base64 to avoid shell escaping hell)
-    let events = opts.events || 'sched/sched_switch sched/sched_waking sched/sched_process_exec sched/sched_process_fork sched/sched_process_exit sched/sched_wakeup_new';
-    if (gpuEvents.length > 0) {
-        events += ' ' + gpuEvents.join(' ');
-        (0, types_1.log)('info', `Including GPU events: ${gpuEvents.join(' ')}`);
-    }
     const config = buildTraceConfig(opts.durationSec, events, opts.heapProfile);
     const configB64 = Buffer.from(config).toString('base64');
     (0, ssh_1.sshExec)(c, `"echo ${configB64} | base64 -d > ${REMOTE_TRACE_CFG}"`);
@@ -580,9 +821,10 @@ function traceCapture(c, opts) {
     catch { }
     const sizeBytes = fs.statSync(opts.outputPath).size;
     (0, types_1.log)('info', `Trace saved: ${opts.outputPath} (${(sizeBytes / 1024).toFixed(1)} KB)`);
-    // Step 7: Run automated trace summary + narrative
+    // Step 7: Run automated trace summary + narrative + actionable hints
     const summary = runTraceSummary(opts.outputPath);
     const narrative = renderTraceNarrative(summary);
+    const hints = computeHints(summary);
     (0, types_1.log)('info', `\n${narrative}`);
     return {
         output: opts.outputPath,
@@ -591,5 +833,6 @@ function traceCapture(c, opts) {
         durationSec: opts.durationSec,
         summary,
         narrative,
+        hints,
     };
 }

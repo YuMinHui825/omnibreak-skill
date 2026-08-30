@@ -223,12 +223,19 @@ omnibreak trace --target <IP>
   --pwd <pass>            SSH password
   --duration <seconds>    Trace duration (default: 10)
   --output <path>         Local output path (default: ./trace.pftrace)
-  --events <list>         Ftrace events (default: auto-detect sched + GPU + process events)
+  --events <list>         Ftrace events (default: auto-detect sched + GPU + process events;
+                          includes sched_blocked_reason for D-state cause, block_rq_issue for
+                          I/O size, filemap_add_to_page_cache for the file behind I/O pressure)
   --sudo                  Use sudo for ftrace access (required for kernel events)
   --sudo-pwd <pass>       Sudo password (defaults to SSH password)
   --start-cmd <cmd>       Command to run on remote AFTER trace starts
   --heap-profile <proc>   Enable heapprofd native heap profiling for process name
 ```
+
+Output includes `summary` (CPU/threads/IO, now with `blocked_function`, `page_fault`,
+`block_io_issue`, `file_io_cache`) and `hints` — actionable I/O recommendations
+(e.g. "thread X blocked 3.2s in D on `page_cache_readahead` — avoid synchronous reads on
+the main thread, grow the read buffer").
 
 Uses [Perfetto tracebox](https://perfetto.dev) — deploys automatically on first use (~20MB one-time download).  
 Returns a `.pftrace` file openable in [ui.perfetto.dev](https://ui.perfetto.dev), plus an auto-generated JSON summary:

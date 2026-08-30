@@ -85,6 +85,8 @@ export interface TraceCaptureResult {
   durationSec: number;
   summary?: Record<string, any>;
   narrative?: string;
+  /** Actionable I/O recommendations derived from the trace summary. */
+  hints?: string[];
 }
 
 /** Stats snapshot for diff comparison */

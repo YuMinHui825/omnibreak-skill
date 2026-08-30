@@ -221,14 +221,16 @@ omnibreak trace --target <IP>
   --pwd <pass>            SSH 密码
   --duration <seconds>    Trace 采集时长（默认 10）
   --output <path>         本地输出路径（默认 ./trace.pftrace）
-  --events <list>         Ftrace 事件（默认：自动检测 调度 + GPU + 进程事件）
+  --events <list>         Ftrace 事件（默认：自动检测 调度 + GPU + 进程事件；
+                          含 sched_blocked_reason 定位 D 状态原因、block_rq_issue 看 I/O 大小、
+                          filemap_add_to_page_cache 定位压力来源文件）
   --sudo                  使用 sudo 执行（ftrace 需要 root 权限）
   --sudo-pwd <pass>       Sudo 密码（默认同 SSH 密码）
   --start-cmd <cmd>       Trace 启动后在远程执行的命令
   --heap-profile <proc>   启用 heapprofd 原生堆剖析，指定进程名
 ```
 
-基于 [Perfetto tracebox](https://perfetto.dev) — 首次自动部署（约 20MB 一次性下载）。  
+基于 [Perfetto tracebox](https://perfetto.dev) — 首次自动部署（官方 CDN 不可达时自动回退到 GitHub Release）。  
 返回 `.pftrace` 文件，拖入 [ui.perfetto.dev](https://ui.perfetto.dev) 可视化查看，同时返回自动生成的 JSON 摘要：
 
 ```
@@ -236,13 +238,23 @@ summary:
   top_cpu_threads     ← CPU 占用 Top-10 线程及毫秒数
   thread_states       ← 线程状态分布（R/S/D/Z）
   io_wait             ← D 状态（IO 阻塞）线程
+  blocked_function    ← D 状态阻塞的内核函数（磁盘读？缺页？）← 关键新增
+  page_fault          ← 缺页驱动的 I/O 争用（冷启动指标）
+  block_io_issue      ← 块层 I/O 请求：操作类型/总字节/平均大小（碎读检测）
+  file_io_cache       ← 进入 page cache 的文件（inode），定位压力源
   scheduling_latency  ← 调度延迟均值/最大值
   process_rss         ← 进程 RSS 峰值
   perf_top_functions  ← CPU 采样火焰图：热点函数 Top-10
+
+hints:
+  ▸ 线程「main」在 D 状态阻塞 3.2s，blocked_function=page_cache_readahead
+    —— 疑似磁盘同步读。建议：避免关键线程同步读文件，加大读 buffer。
 ```
 
 **GPU 自动检测**：探 `/sys/kernel/tracing/events/` 中的 GPU ftrace 源。  
 **CPU 采样**：100Hz `linux.perf` 数据源生成火焰图。  
+**I/O 归因**：`sched_blocked_reason` → `thread_state.blocked_function` 定位 D 状态根因（磁盘/锁/缺页），`block_rq_issue` 看读前大小，`filemap_add_to_page_cache` 按 inode 定位文件。  
+**可行动建议**：`hints` 字段把检测条件转成具体改法（后台线程/加大 buffer/减少启动路径文件访问）。  
 **AI 自然语言摘要**：trace 结果包含 `narrative` 字段 — CPU 热点、线程状态、IO 阻塞、内存峰值以自然语言呈现。  
 **安全**：密码通过 `SSHPASS` 环境变量传递，不出现在 `ps` 输出中。
 
