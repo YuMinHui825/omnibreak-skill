@@ -164,10 +164,14 @@ const SUMMARY_SQL = {
         "GROUP BY utid ORDER BY io_wait_ms DESC LIMIT 10",
     scheduling_latency: "SELECT AVG(dur)/1e6 AS avg_slice_ms, MAX(dur)/1e6 AS max_slice_ms, " +
         "COUNT(*) AS total_switches FROM sched",
-    process_rss: "SELECT name, MAX(CAST(value AS INT))/1024 AS peak_rss_mb " +
+    process_rss: 
+    // `rss` counter is in bytes → /1048576 for MB (a /1024 here would show KB labeled MB).
+    // `name` must be qualified: both `process` and `process_counter_track` have a `name`
+    // column — unqualified would error "ambiguous column name" and drop the section.
+    "SELECT p.name, MAX(CAST(value AS INT))/1048576 AS peak_rss_mb " +
         "FROM counter JOIN process_counter_track ON counter.track_id = process_counter_track.id " +
-        "JOIN process USING (upid) " +
-        "WHERE process_counter_track.name='rss' GROUP BY upid ORDER BY peak_rss_mb DESC LIMIT 10",
+        "JOIN process p USING (upid) " +
+        "WHERE process_counter_track.name IN ('rss', 'mem.rss') GROUP BY p.upid ORDER BY peak_rss_mb DESC LIMIT 10",
     perf_stats: "SELECT COUNT(*) AS total_samples, " +
         "COUNT(DISTINCT callsite_id) AS unique_stacks " +
         "FROM perf_sample WHERE callsite_id IS NOT NULL",
@@ -205,7 +209,7 @@ const SUMMARY_SQL = {
         "FROM counter c " +
         "JOIN process_counter_track t ON c.track_id = t.id " +
         "JOIN process p USING (upid) " +
-        "WHERE t.name='rss' " +
+        "WHERE t.name IN ('rss', 'mem.rss') " +
         "GROUP BY p.upid, CAST(c.ts/1e9 AS INT) " +
         "ORDER BY sec LIMIT 60",
     // CPU frequency distribution
@@ -213,12 +217,6 @@ const SUMMARY_SQL = {
         "SUM(dur)/1e6 AS total_ms " +
         "FROM actual_freq " +
         "GROUP BY freq_mhz ORDER BY total_ms DESC LIMIT 10",
-    // Syscall analysis
-    syscalls: "SELECT name, COUNT(*) AS count, SUM(dur)/1e6 AS total_ms " +
-        "FROM raw " +
-        "JOIN thread USING (utid) " +
-        "WHERE name LIKE 'sys_%' " +
-        "GROUP BY name ORDER BY count DESC LIMIT 15",
     // Wakeup latency
     wakeup_latency: "SELECT name, AVG(waker_dur)/1e3 AS avg_wakeup_us, COUNT(*) AS wakeups " +
         "FROM sched JOIN thread ON sched.waker_utid = thread.utid " +
@@ -358,9 +356,16 @@ function ensureTracebox(c) {
     try {
         (0, types_1.log)('info', 'Downloading tracebox (get.perfetto.dev)...');
         (0, ssh_1.sshExec)(c, `"curl -fsSL -o ${REMOTE_TRACEBOX} https://get.perfetto.dev/tracebox && chmod +x ${REMOTE_TRACEBOX}"`);
-        // Force the launcher to fetch the real binary; allow a long first-run download.
+        // The launcher downloads the REAL binary into ~/.local/share/perfetto/prebuilts/
+        // tracebox-<sha> and execs it — but the launcher FILE itself stays a python script.
+        // Under `--sudo` the capture runs as root (HOME=/root) where the cache is absent, so a
+        // launcher left here would fail at capture time. Promote the cached real binary over the
+        // launcher, then require a real ELF (same gate as the initial check) before returning.
         sshExecLong(c, `"${REMOTE_TRACEBOX} --version"`, 240000);
-        return;
+        (0, ssh_1.sshExecSafe)(c, `ls -t ~/.local/share/perfetto/prebuilts/tracebox-* 2>/dev/null | head -1 | xargs -r -I{} cp {} ${REMOTE_TRACEBOX} && chmod +x ${REMOTE_TRACEBOX}`);
+        const out = (0, ssh_1.sshExec)(c, `"test -x ${REMOTE_TRACEBOX} && file ${REMOTE_TRACEBOX} | grep -q ELF && ${REMOTE_TRACEBOX} --version 2>&1 | tail -1 || echo TRACEBOX_MISSING"`);
+        if (!out.includes('TRACEBOX_MISSING') && /v?\d+\.\d+/.test(out))
+            return;
     }
     catch { }
     (0, types_1.log)('info', 'Official tracebox download failed — falling back to GitHub release...');
@@ -487,12 +492,15 @@ function renderTraceNarrative(summary) {
             const parts = r.trim().split(/\s+/);
             if (parts.length >= 3) {
                 const func = parts[0];
-                if (seen.has(func))
-                    return;
-                seen.add(func);
-                shown++;
                 const bytes = parts[parts.length - 1];
                 const caller = parts.length > 3 ? parts.slice(1, -1).join(' ') : '(root)';
+                // Dedup on the full function+caller text, not the first token — e.g. `operator new`
+                // vs `operator delete` share parts[0]="operator" and would wrongly collapse.
+                const key = parts.slice(0, -1).join(' ');
+                if (seen.has(key))
+                    return;
+                seen.add(key);
+                shown++;
                 const fmt = (parseInt(bytes) >= 1048576) ? `${(parseInt(bytes) / 1048576).toFixed(1)}MB`
                     : (parseInt(bytes) >= 1024) ? `${(parseInt(bytes) / 1024).toFixed(0)}KB` : `${bytes}B`;
                 lines.push(`  ${func} ← ${caller}: ${fmt}`);
@@ -549,22 +557,6 @@ function renderTraceNarrative(summary) {
                 const parts = r.trim().split(/\s+/);
                 if (parts.length >= 3) {
                     lines.push(`  ${parts[0]}MHz: ${parseFloat(parts[2]).toFixed(0)}ms (${parts[1]} samples)`);
-                }
-            });
-        }
-    }
-    // Syscall analysis
-    if (summary.syscalls && Array.isArray(summary.syscalls)) {
-        const rows = summary.syscalls;
-        if (rows.length > 0) {
-            lines.push('\n=== Top Syscalls ===');
-            rows.slice(0, 8).forEach((r, i) => {
-                const parts = r.trim().split(/\s+/);
-                if (parts.length >= 3) {
-                    const count = parts[parts.length - 2];
-                    const ms = parts[parts.length - 1];
-                    const name = parts.slice(0, -2).join(' ');
-                    lines.push(`  ${i + 1}. ${name}: ${count} calls, ${parseFloat(ms).toFixed(1)}ms`);
                 }
             });
         }
@@ -704,6 +696,8 @@ function runTraceSummary(traceFile) {
 }
 /** sshExec but with configurable timeout for long operations (trace capture, downloads) */
 function sshExecLong(c, cmd, timeoutMs) {
+    // Honor timeoutMs on every auth path — falling back to sshExec (hard 15s timeout) would
+    // kill long operations (trace capture, tracebox downloads) for key-based / no-sshpass auth.
     if (c.password) {
         const hasSshpass = (() => { try {
             (0, child_process_1.execSync)('which sshpass 2>/dev/null', { stdio: 'pipe' });
@@ -715,6 +709,9 @@ function sshExecLong(c, cmd, timeoutMs) {
         if (hasSshpass) {
             return (0, child_process_1.execSync)(`SSHPASS='${escSh(c.password)}' sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${c.port} ${escSh(c.user)}@${escSh(c.host)} ${cmd}`, { timeout: timeoutMs, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 });
         }
+    }
+    if (!c.password) {
+        return (0, child_process_1.execSync)(`ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${c.port} ${escSh(c.user)}@${escSh(c.host)} ${cmd}`, { timeout: timeoutMs, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 });
     }
     return (0, ssh_1.sshExec)(c, cmd);
 }
@@ -817,18 +814,30 @@ function traceCapture(c, opts) {
     if (opts.startCmd) {
         (0, types_1.log)('info', `Running start command: ${opts.startCmd}`);
     }
-    sshExecLong(c, `"${remoteCmd} 2>&1"`, (opts.durationSec + 60) * 1000);
+    // base64 end-to-end (sshExecSafeLong): startCmd / sudoPwd are spliced into remoteCmd, and a
+    // raw sshExec would let the LOCAL shell re-expand `$`, `$(...)` or break on `"` inside them.
+    (0, ssh_1.sshExecSafeLong)(c, `${remoteCmd} 2>&1`, (opts.durationSec + 60) * 1000);
     // If run with sudo, fix permissions so we can scp the file back
     if (opts.sudo) {
         const chownCmd = opts.sudoPwd
             ? `echo '${escSh(opts.sudoPwd)}' | sudo -S chmod 644 ${REMOTE_TRACE_FILE}`
             : `sudo chmod 644 ${REMOTE_TRACE_FILE}`;
         try {
-            (0, ssh_1.sshExec)(c, `"${chownCmd}"`);
+            (0, ssh_1.sshExecSafe)(c, chownCmd);
         }
         catch { }
     }
     (0, types_1.log)('info', 'Trace capture complete, fetching file...');
+    // Wait for the background tracebox to exit before pulling — the --background child runs for
+    // duration_ms and scp'ing before it flushes could pull a truncated file. `[o]mnibreak-…`
+    // avoids pgrep matching itself; the decoded script reaches `sh` via stdin so its cmdline
+    // never contains the pattern either. Timeout = duration + 30s safety margin.
+    try {
+        (0, ssh_1.sshExecSafe)(c, `for i in $(seq 1 ${opts.durationSec + 30}); do pgrep -f '[o]mnibreak-tracebox' >/dev/null || exit 0; sleep 1; done; exit 1`);
+    }
+    catch {
+        (0, types_1.log)('info', 'tracebox still running after timeout — pulling trace anyway');
+    }
     // Step 5: Pull trace file from remote
     scpPull(c, REMOTE_TRACE_FILE, opts.outputPath);
     // Step 6: Clean up remote temp files
@@ -836,7 +845,7 @@ function traceCapture(c, opts) {
         ? (opts.sudoPwd ? `echo '${escSh(opts.sudoPwd)}' | sudo -S rm -f ${REMOTE_TRACE_FILE} ${REMOTE_TRACE_CFG}` : `sudo rm -f ${REMOTE_TRACE_FILE} ${REMOTE_TRACE_CFG}`)
         : `rm -f ${REMOTE_TRACE_FILE} ${REMOTE_TRACE_CFG}`;
     try {
-        (0, ssh_1.sshExec)(c, `"${rmCmd}"`);
+        (0, ssh_1.sshExecSafe)(c, rmCmd);
     }
     catch { }
     const sizeBytes = fs.statSync(opts.outputPath).size;

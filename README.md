@@ -237,7 +237,8 @@ Output includes `summary` (CPU/threads/IO, now with `blocked_function`, `page_fa
 (e.g. "thread X blocked 3.2s in D on `page_cache_readahead` — avoid synchronous reads on
 the main thread, grow the read buffer").
 
-Uses [Perfetto tracebox](https://perfetto.dev) — deploys automatically on first use (~20MB one-time download).  
+Uses [Perfetto tracebox](https://perfetto.dev) — deploys automatically on first use (official CDN → GitHub
+release fallback; only I/O/GPU events present on the target kernel are enabled).  
 Returns a `.pftrace` file openable in [ui.perfetto.dev](https://ui.perfetto.dev), plus an auto-generated JSON summary:
 
 ```
@@ -245,9 +246,13 @@ summary:
   top_cpu_threads     ← top-10 CPU consumers with ms
   thread_states       ← per-thread end_state breakdown
   io_wait             ← threads stuck in D state
+  blocked_function    ← kernel function each D-state thread blocked on (needs sched_blocked_reason — kernel ≥ 6.x)
+  page_fault          ← page-fault-driven I/O wait (cold-start indicator)
+  block_io_issue      ← block-layer requests: op/bytes/avg size (fragmented-read detection)
+  file_io_cache       ← files entering page cache by inode (I/O pressure source)
   scheduling_latency  ← avg/max scheduling slice duration
-  process_rss         ← per-process peak RSS
-  perf_top_functions  ← flame graph: top functions by CPU samples
+  process_rss         ← per-process peak RSS (MB)
+  flame_functions     ← flame graph: top functions by CPU samples
 ```
 
 **GPU auto-detection:** probes `/sys/kernel/tracing/events/` for GPU ftrace sources.  

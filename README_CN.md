@@ -230,7 +230,7 @@ omnibreak trace --target <IP>
   --heap-profile <proc>   启用 heapprofd 原生堆剖析，指定进程名
 ```
 
-基于 [Perfetto tracebox](https://perfetto.dev) — 首次自动部署（官方 CDN 不可达时自动回退到 GitHub Release）。  
+基于 [Perfetto tracebox](https://perfetto.dev) — 首次自动部署（官方 CDN 不可达时自动回退到 GitHub Release；只启用目标内核实际支持的 I/O/GPU 事件）。  
 返回 `.pftrace` 文件，拖入 [ui.perfetto.dev](https://ui.perfetto.dev) 可视化查看，同时返回自动生成的 JSON 摘要：
 
 ```
@@ -238,13 +238,13 @@ summary:
   top_cpu_threads     ← CPU 占用 Top-10 线程及毫秒数
   thread_states       ← 线程状态分布（R/S/D/Z）
   io_wait             ← D 状态（IO 阻塞）线程
-  blocked_function    ← D 状态阻塞的内核函数（磁盘读？缺页？）← 关键新增
+  blocked_function    ← D 状态阻塞的内核函数（需要 sched_blocked_reason，内核 ≥ 6.x）
   page_fault          ← 缺页驱动的 I/O 争用（冷启动指标）
   block_io_issue      ← 块层 I/O 请求：操作类型/总字节/平均大小（碎读检测）
   file_io_cache       ← 进入 page cache 的文件（inode），定位压力源
   scheduling_latency  ← 调度延迟均值/最大值
-  process_rss         ← 进程 RSS 峰值
-  perf_top_functions  ← CPU 采样火焰图：热点函数 Top-10
+  process_rss         ← 进程 RSS 峰值（MB）
+  flame_functions     ← CPU 采样火焰图：热点函数 Top-10
 
 hints:
   ▸ 线程「main」在 D 状态阻塞 3.2s，blocked_function=page_cache_readahead

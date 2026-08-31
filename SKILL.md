@@ -151,9 +151,11 @@ omnibreak trace --target <IP> [--duration 10] [--sudo] [--pwd <pass>]
                  blocked_function, page_fault, block_io_issue, file_io_cache, ...},
        hints: ["线程「main」在 D 状态阻塞 3.2s，blocked_function=page_cache_readahead — 建议…"]}
     Auto-detects GPU events. 100Hz CPU flame graphs. Opens in ui.perfetto.dev.
-    Capture includes sched_blocked_reason (D-state cause), block_rq_issue (I/O size),
-    filemap_add_to_page_cache (which file), and power/cpu_frequency. The summary and
-    `hints` turn trace data into actionable I/O recommendations.
+    Kernel-adaptive events: sched_blocked_reason (D-state cause; kernel ≥ 6.x — on older
+    kernels blocked_function stays empty and a hint explains why), block_rq_issue (I/O
+    size), filemap_add_to_page_cache (which file, via i_ino), power/cpu_frequency. Only
+    events present on the target kernel are enabled. The summary and `hints` turn trace
+    data into actionable I/O recommendations.
 ```
 
 ### Utility

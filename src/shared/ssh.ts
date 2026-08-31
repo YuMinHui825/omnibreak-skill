@@ -20,6 +20,8 @@ export function sshExecSafe(c: SshConfig, cmd: string): string {
 /** sshExecSafe with configurable timeout for long-running commands */
 export function sshExecSafeLong(c: SshConfig, cmd: string, timeoutMs: number): string {
   const b64 = Buffer.from(cmd).toString('base64');
+  // Honor timeoutMs on every auth path (not just password+sshpass) so long operations
+  // like the tracebox GitHub fallback aren't silently killed at sshExec's 15s default.
   if (c.password) {
     const hasSshpass = (() => { try { require('child_process').execSync('which sshpass 2>/dev/null', { stdio: 'pipe' }); return true; } catch { return false; } })();
     if (hasSshpass) {
@@ -28,6 +30,12 @@ export function sshExecSafeLong(c: SshConfig, cmd: string, timeoutMs: number): s
         { timeout: timeoutMs, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 },
       );
     }
+  }
+  if (!c.password) {
+    return require('child_process').execSync(
+      `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${c.port} ${esc(c.user)}@${esc(c.host)} "echo ${b64} | base64 -d | sh"`,
+      { timeout: timeoutMs, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 },
+    );
   }
   return sshExec(c, `"echo ${b64} | base64 -d | sh"`);
 }
