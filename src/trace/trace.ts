@@ -2,7 +2,7 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { SshConfig, sshExec, sshExecSafe, scpDeploy } from '../shared/ssh';
+import { SshConfig, sshExec, sshExecSafe, sshExecSafeLong, scpDeploy } from '../shared/ssh';
 import { log, TraceCaptureResult } from '../shared/types';
 
 const REMOTE_TRACEBOX = '/tmp/omnibreak-tracebox';
@@ -250,7 +250,7 @@ const SUMMARY_SQL: Record<string, string> = {
   // Block-layer I/O requests by operation type and size (from block_rq_issue ftrace).
   block_io_issue:
     "SELECT EXTRACT_ARG(raw.arg_set_id, 'rwbs') AS op, COUNT(*) AS count, " +
-    "SUM(EXTRACT_ARG(raw.arg_set_id, 'bytes'))/1048576 AS total_mb, " +
+    "SUM(EXTRACT_ARG(raw.arg_set_id, 'bytes'))/1048576.0 AS total_mb, " +
     "AVG(EXTRACT_ARG(raw.arg_set_id, 'nr_sector')) AS avg_sectors " +
     "FROM raw WHERE raw.name = 'block_rq_issue' " +
     "GROUP BY op ORDER BY count DESC LIMIT 10",
@@ -258,10 +258,12 @@ const SUMMARY_SQL: Record<string, string> = {
   // GLOB matches both the modern `filemap_add_to_page_cache` and the older
   // `mm_filemap_add_to_page_cache` event name (kernel ≤ 5.x).
   file_io_cache:
+    // Field is `i_ino` (verified: the filemap_add_to_page_cache tracepoint carries
+    // i_ino/index/pfn/s_dev — there is no `inode` arg).
     "SELECT EXTRACT_ARG(raw.arg_set_id, 's_dev') AS dev, " +
-    "EXTRACT_ARG(raw.arg_set_id, 'inode') AS inode, COUNT(*) AS count " +
+    "EXTRACT_ARG(raw.arg_set_id, 'i_ino') AS i_ino, COUNT(*) AS count " +
     "FROM raw WHERE raw.name GLOB '*filemap_add_to_page_cache*' " +
-    "GROUP BY dev, inode ORDER BY count DESC LIMIT 12",
+    "GROUP BY dev, i_ino ORDER BY count DESC LIMIT 12",
 };
 
 function ensureTraceProcessor(): string {
@@ -353,10 +355,17 @@ function computeHints(summary: Record<string, any>): string[] {
  * most networks) when the official CDN is blocked.
  */
 function ensureTracebox(c: SshConfig): void {
-  // Already a real binary? (--version returns something like "tracebox v58.2 ...").
+  // Already a real, executable tracebox? Three traps make a naive check unsafe:
+  //  (1) a MISSING binary prints "…/omnibreak-tracebox: not found" — which CONTAINS the
+  //      word "tracebox", so an includes() match would skip the download on fresh targets;
+  //  (2) the get.perfetto.dev launcher is a python script whose `--version` also reports a
+  //      version (via its cached binary) but only works with that binary present — under
+  //      `sudo` the cache is looked up in root's HOME and the download fails at capture time;
+  //  (3) so we require an actual ELF: `file | grep ELF`, plus a version line like
+  //      "Perfetto v58.2 …". Anything else (missing, launcher, download error) → reinstall.
   try {
-    const out = sshExec(c, `"${REMOTE_TRACEBOX} --version 2>&1 | tail -1"`);
-    if (/v?\d+\.\d+/.test(out) || out.toLowerCase().includes('tracebox')) return;
+    const out = sshExec(c, `"test -x ${REMOTE_TRACEBOX} && file ${REMOTE_TRACEBOX} | grep -q ELF && ${REMOTE_TRACEBOX} --version 2>&1 | tail -1 || echo TRACEBOX_MISSING"`);
+    if (!out.includes('TRACEBOX_MISSING') && /v?\d+\.\d+/.test(out)) return;
   } catch {}
 
   try {
@@ -368,14 +377,18 @@ function ensureTracebox(c: SshConfig): void {
   } catch {}
 
   log('info', 'Official tracebox download failed — falling back to GitHub release...');
-  const arch = `$(uname -m | grep -q aarch64 && echo arm64 || echo amd64)`;
-  const cmd =
-    `cd /tmp && rm -f perfetto-rel.zip && ` +
-    `curl -fsSL --retry 2 -o perfetto-rel.zip https://github.com/google/perfetto/releases/download/v58.2/linux-${arch}.zip && ` +
-    `(unzip -o -q perfetto-rel.zip -d perfetto-rel 2>/dev/null || python3 -c "import zipfile;zipfile.ZipFile('perfetto-rel.zip').extractall('perfetto-rel')") && ` +
+  // base64-encode end-to-end (sshExecSafeLong): the script has nested double quotes
+  // (python3 -c) and a `$(uname …)` substitution that must run on the REMOTE host. A raw
+  // sshExecLong would let the local shell split on the inner quotes (syntax error) and
+  // evaluate $ARCH locally — wrong architecture on a cross-arch dev machine.
+  const script =
+    'ARCH=$(uname -m | grep -q aarch64 && echo arm64 || echo amd64); ' +
+    'cd /tmp && rm -f perfetto-rel.zip && ' +
+    'curl -fsSL --retry 2 -o perfetto-rel.zip https://github.com/google/perfetto/releases/download/v58.2/linux-$ARCH.zip && ' +
+    "(unzip -o -q perfetto-rel.zip -d perfetto-rel 2>/dev/null || python3 -c \"import zipfile;zipfile.ZipFile('perfetto-rel.zip').extractall('perfetto-rel')\") && " +
     `find perfetto-rel -name tracebox -exec cp {} ${REMOTE_TRACEBOX} \\; && chmod +x ${REMOTE_TRACEBOX} && ` +
-    `rm -rf perfetto-rel perfetto-rel.zip`;
-  sshExecLong(c, `"${cmd}"`, 300000);
+    'rm -rf perfetto-rel perfetto-rel.zip';
+  sshExecSafeLong(c, script, 300000);
 }
 
 /** Parse the tabular stdout of a trace_processor query into trimmed rows (skip header/blank). */
@@ -678,16 +691,20 @@ function runTraceSummary(traceFile: string): Record<string, any> {
     } catch {}
     try {
       for (const [key, sql] of Object.entries(SUMMARY_SQL)) {
-        try {
-          const b64 = Buffer.from(sql).toString('base64');
-          // base64 --decode works on both Linux and macOS (base64 -d is Linux-only)
-          const q = session
-            ? `echo ${b64} | base64 --decode | "${tp}" query --remote "${sessionName}" 2>/dev/null`
-            : `echo ${b64} | base64 --decode | "${tp}" "${traceFile}" 2>/dev/null`;
-          const out = execSync(q, { encoding: 'utf8', timeout: 30000, maxBuffer: 10 * 1024 * 1024, shell: '/bin/bash' });
-          const rows = parseQueryRows(out);
-          if (rows.length > 0) summary[key] = rows;
-        } catch { summary[key] = null; }
+        const b64 = Buffer.from(sql).toString('base64');
+        // base64 --decode works on both Linux and macOS (base64 -d is Linux-only)
+        const run = (q: string) => parseQueryRows(
+          execSync(q, { encoding: 'utf8', timeout: 30000, maxBuffer: 10 * 1024 * 1024, shell: '/bin/bash' }));
+        let rows: string[] = [];
+        if (session) {
+          // Session mode first (single trace load — faster for many queries); if a query
+          // fails in-session, fall back to a direct per-query run against the trace file.
+          try { rows = run(`echo ${b64} | base64 --decode | "${tp}" query --remote "${sessionName}" 2>/dev/null`); } catch {}
+        }
+        if (rows.length === 0) {
+          try { rows = run(`echo ${b64} | base64 --decode | "${tp}" "${traceFile}" 2>/dev/null`); } catch {}
+        }
+        if (rows.length > 0) summary[key] = rows;
       }
     } finally {
       if (session) {
