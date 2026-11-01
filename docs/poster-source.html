@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Poster</title>
+<style>
+  *{ margin:0; padding:0; box-sizing:border-box; }
+  html,body{ width:1080px; height:1440px; overflow:hidden; }
+  body{
+    font-family:-apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background:#0E0E15; color:#E9E7E2; position:relative;
+  }
+
+  .glow{
+    position:absolute; inset:0;
+    background:
+      radial-gradient(760px 560px at 6% 2%,   rgba(77,182,172,.26), transparent 66%),
+      radial-gradient(700px 600px at 100% 92%, rgba(255,183,77,.17), transparent 66%),
+      radial-gradient(560px 440px at 78% 6%,  rgba(239,83,80,.10),  transparent 70%);
+  }
+  .grid{
+    position:absolute; inset:0;
+    background-image:
+      linear-gradient(rgba(233,231,226,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(233,231,226,.04) 1px, transparent 1px);
+    background-size:72px 72px;
+    mask-image:radial-gradient(ellipse 92% 84% at 34% 34%, #000 22%, transparent 82%);
+    -webkit-mask-image:radial-gradient(ellipse 92% 84% at 34% 34%, #000 22%, transparent 82%);
+  }
+  .frame{ position:absolute; inset:30px; border:1px solid rgba(233,231,226,.1); border-radius:26px; }
+
+  /* 右上角闪电水印 */
+  .watermark{
+    position:absolute; right:-70px; top:-60px; width:520px; height:520px;
+    opacity:.07; transform:rotate(8deg);
+  }
+
+  .content{ position:absolute; left:88px; right:88px; top:196px; }
+
+  .kicker{
+    display:inline-flex; align-items:center; gap:12px;
+    font-family:ui-monospace, "SF Mono", Menlo, monospace;
+    font-size:19px; letter-spacing:.26em; text-transform:uppercase;
+    color:#4DB6AC; border:1px solid rgba(77,182,172,.34);
+    background:rgba(77,182,172,.08); border-radius:999px; padding:12px 26px;
+  }
+  .kicker i{ width:10px; height:10px; border-radius:50%; background:#4DB6AC; box-shadow:0 0 12px #4DB6AC; }
+
+  h1{
+    margin-top:52px; font-size:104px; line-height:1.2; letter-spacing:-.035em; font-weight:800;
+  }
+  h1 .hl{
+    background:linear-gradient(180deg,#FFE082,#FFB74D);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+
+  .rule{ margin:44px 0 0; display:flex; gap:14px; align-items:center; }
+  .rule span{
+    font-family:ui-monospace, "SF Mono", Menlo, monospace;
+    font-size:25px; color:#9A98A8; letter-spacing:.02em;
+  }
+  .rule .sep{ color:#EF5350; }
+
+  /* 终端卡片 */
+  .term{
+    margin-top:56px; border:1px solid rgba(233,231,226,.16); border-radius:18px;
+    background:linear-gradient(180deg,#181823,#111119);
+    box-shadow:0 40px 90px -50px rgba(0,0,0,.95), inset 0 1px 0 rgba(255,255,255,.05);
+    overflow:hidden;
+  }
+  .term-bar{
+    display:flex; align-items:center; gap:11px; padding:16px 22px;
+    border-bottom:1px solid rgba(233,231,226,.08); background:rgba(255,255,255,.02);
+  }
+  .dot{ width:13px; height:13px; border-radius:50%; }
+  .term-title{
+    margin-left:12px; font-family:ui-monospace, "SF Mono", Menlo, monospace;
+    font-size:18px; color:#5E5C70; letter-spacing:.06em;
+  }
+  .term-body{
+    padding:28px 28px 32px; font-family:ui-monospace, "SF Mono", Menlo, monospace;
+    font-size:23px; line-height:2.05;
+  }
+  .term-body div{ white-space:pre; }
+  .c-dim{ color:#5E5C70; }
+  .c-ok{ color:#4DB6AC; }
+  .c-warn{ color:#FFB74D; }
+  .c-bad{ color:#EF5350; }
+  .c-key{ color:#FFE082; }
+
+  .foot{
+    position:absolute; left:88px; right:88px; bottom:74px;
+    display:flex; align-items:flex-end; justify-content:space-between;
+  }
+  .foot-l{ font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:23px; color:#9A98A8; letter-spacing:.04em; }
+  .foot-l b{ color:#E9E7E2; font-weight:500; }
+  .foot-r{ font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:22px; color:#8A8898; letter-spacing:.02em; }
+</style>
+</head>
+<body>
+  <div class="glow"></div>
+  <div class="grid"></div>
+  <div class="frame"></div>
+
+  <svg class="watermark" viewBox="0 0 256 256" fill="none">
+    <polygon points="128,20 186,128 154,128 172,236 78,120 112,120" fill="#FFE082"/>
+  </svg>
+
+  <div class="content">
+    <div class="kicker"><i></i>Remote Linux Debugger</div>
+
+    <h1>AI 写代码，<br><span class="hl">它让代码跑通。</span></h1>
+
+    <div class="rule">
+      <span>真断点</span><span class="sep">·</span>
+      <span>崩溃回溯</span><span class="sep">·</span>
+      <span>火焰图</span>
+    </div>
+
+    <div class="term">
+      <div class="term-bar">
+        <span class="dot" style="background:#EF5350"></span>
+        <span class="dot" style="background:#FFB74D"></span>
+        <span class="dot" style="background:#4DB6AC"></span>
+        <span class="term-title">omnibreak — debug session</span>
+      </div>
+      <div class="term-body">
+        <div><span class="c-dim">$</span> omnibreak break --file handler.c --line 342</div>
+        <div>  <span class="c-ok">✓</span> <span class="c-dim">breakpoint set</span></div>
+        <div><span class="c-dim">$</span> omnibreak c</div>
+        <div>  <span class="c-warn">●</span> <span class="c-key">stopped</span> <span class="c-dim">handler.c:342</span></div>
+        <div>    <span class="c-dim">len=0   fd=</span><span class="c-bad">-1</span></div>
+        <div><span class="c-dim">$</span> omnibreak crash</div>
+        <div>  <span class="c-bad">✗ SIGSEGV</span> <span class="c-key">parse_config()</span> <span class="c-dim">main.c:88</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="foot-l"><b>OMNIBREAK-SKILL</b></div>
+    <div class="foot-r">github.com/YuMinHui825/omnibreak-skill</div>
+  </div>
+</body>
+</html>
