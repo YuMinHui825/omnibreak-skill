@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OmniBreak — 给 AI 写的代码装个调试器</title>
+
+<meta name="description" content="AI 写代码，OmniBreak 让它跑通。远程 Linux 调试 CLI + Agent Skill：真断点、真崩溃回溯、内存泄漏、CPU/GPU 火焰图，全部返回 JSON。">
+<link rel="canonical" href="https://yuminhui825.github.io/omnibreak-skill/">
+
+<!-- Open Graph / 微信分享卡片 -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="OmniBreak">
+<meta property="og:title" content="OmniBreak — 给 AI 写的代码装个调试器">
+<meta property="og:description" content="真 Linux、真断点、真修复。远程调试 CLI + Claude Code / Codex Skill，deploy → break → fix → loop。">
+<meta property="og:url" content="https://yuminhui825.github.io/omnibreak-skill/">
+<meta property="og:image" content="https://yuminhui825.github.io/omnibreak-skill/og-1280x640.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="OmniBreak — AI 写代码，它让代码跑通">
+<meta itemprop="name" content="OmniBreak">
+<meta itemprop="description" content="AI 写代码，OmniBreak 让它跑通。远程 Linux 调试 CLI + Agent Skill。">
+<meta itemprop="image" content="https://yuminhui825.github.io/omnibreak-skill/og-1280x640.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="OmniBreak — 给 AI 写的代码装个调试器">
+<meta name="twitter:description" content="真 Linux、真断点、真修复。deploy → break → fix → loop。">
+<meta name="twitter:image" content="https://yuminhui825.github.io/omnibreak-skill/og-1280x640.png">
+
+<meta name="theme-color" content="#0E0E15">
+<link rel="icon" href="brand-icon.png">
+
+<style>
+:root{
+  --bg:        #0E0E15;
+  --bg-2:      #13131D;
+  --panel:     #16161F;
+  --line:      rgba(233,231,226,.08);
+  --line-2:    rgba(233,231,226,.16);
+  --ink:       #E9E7E2;
+  --ink-dim:   #9A98A8;
+  --ink-faint: #5E5C70;
+  --teal:      #4DB6AC;
+  --amber:     #FFB74D;
+  --red:       #EF5350;
+  --yellow:    #FFE082;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --max: 1180px;
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html{ scroll-behavior:smooth; -webkit-text-size-adjust:100%; }
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:16px;
+  line-height:1.75;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+
+/* ---------- 背景氛围 ---------- */
+.bg-grid{
+  position:fixed; inset:0; z-index:-2; pointer-events:none;
+  background-image:
+    linear-gradient(rgba(233,231,226,.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(233,231,226,.028) 1px, transparent 1px);
+  background-size:64px 64px;
+  mask-image:radial-gradient(ellipse 90% 60% at 50% 0%, #000 30%, transparent 78%);
+  -webkit-mask-image:radial-gradient(ellipse 90% 60% at 50% 0%, #000 30%, transparent 78%);
+}
+.bg-glow{
+  position:fixed; inset:0; z-index:-3; pointer-events:none;
+  background:
+    radial-gradient(620px 420px at 12% -6%,  rgba(77,182,172,.16), transparent 70%),
+    radial-gradient(560px 460px at 92% 8%,   rgba(255,183,77,.10), transparent 70%),
+    radial-gradient(700px 500px at 50% 108%, rgba(239,83,80,.07),  transparent 70%);
+}
+.bg-noise{
+  position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.035;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---------- 左侧轨道 ---------- */
+.rail{
+  position:fixed; left:0; top:0; bottom:0; width:56px; z-index:20;
+  display:flex; flex-direction:column; align-items:center;
+  border-right:1px solid var(--line);
+  background:rgba(14,14,21,.55); backdrop-filter:blur(10px);
+}
+.rail-word{
+  margin-top:28px;
+  writing-mode:vertical-rl; text-orientation:mixed;
+  font-family:var(--mono); font-size:11px; letter-spacing:.42em;
+  color:var(--ink-faint); text-transform:uppercase;
+}
+.rail-track{
+  flex:1; width:1px; margin:22px 0; background:var(--line); position:relative;
+}
+.rail-fill{
+  position:absolute; left:0; top:0; width:1px; height:0;
+  background:linear-gradient(180deg, var(--teal), var(--amber));
+  transition:height .12s linear;
+}
+.rail-bp{
+  margin-bottom:26px; width:9px; height:9px; border-radius:50%;
+  background:var(--red); box-shadow:0 0 0 0 rgba(239,83,80,.5);
+  animation:pulse 2.6s infinite;
+}
+@keyframes pulse{
+  0%{ box-shadow:0 0 0 0 rgba(239,83,80,.45); }
+  70%{ box-shadow:0 0 0 10px rgba(239,83,80,0); }
+  100%{ box-shadow:0 0 0 0 rgba(239,83,80,0); }
+}
+
+.wrap{ margin-left:56px; }
+.inner{ max-width:var(--max); margin:0 auto; padding:0 clamp(20px,4vw,52px); }
+
+/* 网格子项默认 min-width:auto，长命令行会把轨道撑破导致横向溢出 */
+.hero-grid > *, .cmd-wrap > *, .step > *{ min-width:0; }
+
+/* ---------- 顶栏 ---------- */
+header{
+  position:sticky; top:0; z-index:30;
+  backdrop-filter:blur(14px);
+  background:linear-gradient(180deg, rgba(14,14,21,.88), rgba(14,14,21,.55));
+  border-bottom:1px solid var(--line);
+}
+.nav{ display:flex; align-items:center; gap:14px; height:62px; }
+.brand{ display:flex; align-items:center; gap:11px; text-decoration:none; color:var(--ink); }
+.brand img{ width:26px; height:26px; border-radius:7px; }
+.brand b{ font-size:15px; letter-spacing:.02em; font-weight:700; }
+.nav-links{ margin-left:auto; display:flex; align-items:center; gap:6px; }
+.nav-links a{
+  font-family:var(--mono); font-size:12px; letter-spacing:.06em;
+  color:var(--ink-dim); text-decoration:none; padding:8px 11px; border-radius:6px;
+  transition:color .2s, background .2s;
+}
+.nav-links a:hover{ color:var(--ink); background:rgba(233,231,226,.05); }
+.nav-star{
+  display:inline-flex; align-items:center; gap:7px;
+  border:1px solid var(--line-2); border-radius:6px;
+  color:var(--ink) !important; padding:7px 13px !important;
+}
+.nav-star:hover{ border-color:var(--teal); background:rgba(77,182,172,.1) !important; }
+
+/* ---------- Hero ---------- */
+.hero{ padding:clamp(56px,9vw,110px) 0 clamp(48px,7vw,86px); position:relative; }
+.hero-grid{
+  display:grid; grid-template-columns:1.02fr .98fr;
+  gap:clamp(28px,4vw,60px); align-items:center;
+}
+.kicker{
+  display:inline-flex; align-items:center; gap:9px;
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.2em;
+  color:var(--teal); text-transform:uppercase;
+  border:1px solid rgba(77,182,172,.28); border-radius:999px;
+  padding:6px 13px; background:rgba(77,182,172,.07);
+}
+.kicker::before{
+  content:""; width:6px; height:6px; border-radius:50%;
+  background:var(--teal); box-shadow:0 0 8px var(--teal);
+}
+h1{
+  margin:26px 0 0;
+  font-size:clamp(34px,5.4vw,58px);
+  line-height:1.16; letter-spacing:-.02em; font-weight:800;
+}
+h1 .hl{
+  background:linear-gradient(180deg, var(--yellow), var(--amber));
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  position:relative; white-space:nowrap;
+}
+.lede{
+  margin:22px 0 0; max-width:33em;
+  color:var(--ink-dim); font-size:clamp(15px,1.35vw,17.5px); line-height:1.85;
+}
+.lede code{
+  font-family:var(--mono); font-size:.92em; color:var(--teal);
+  background:rgba(77,182,172,.1); padding:1px 6px; border-radius:4px;
+}
+.cta-row{ display:flex; flex-wrap:wrap; gap:12px; margin-top:32px; }
+.btn{
+  display:inline-flex; align-items:center; gap:9px;
+  font-family:var(--mono); font-size:13.5px; letter-spacing:.02em;
+  padding:13px 22px; border-radius:8px; text-decoration:none;
+  transition:transform .18s, box-shadow .18s, background .18s, border-color .18s;
+  border:1px solid transparent;
+}
+.btn:active{ transform:translateY(1px); }
+.btn-primary{
+  background:linear-gradient(178deg, var(--yellow), var(--amber));
+  color:#1A1408; font-weight:700;
+  box-shadow:0 6px 24px -8px rgba(255,183,77,.55);
+}
+.btn-primary:hover{ box-shadow:0 10px 32px -8px rgba(255,183,77,.75); transform:translateY(-2px); }
+.btn-ghost{
+  border-color:var(--line-2); color:var(--ink);
+  background:rgba(233,231,226,.03);
+}
+.btn-ghost:hover{ border-color:var(--ink-faint); background:rgba(233,231,226,.07); transform:translateY(-2px); }
+
+/* ---------- 终端 ---------- */
+.term{
+  position:relative; border:1px solid var(--line-2); border-radius:12px;
+  background:linear-gradient(180deg, #171722, #111119);
+  box-shadow:0 30px 70px -40px rgba(0,0,0,.95), inset 0 1px 0 rgba(255,255,255,.05);
+  overflow:hidden;
+}
+.term::after{
+  content:""; position:absolute; left:0; right:0; height:120px; top:-120px;
+  background:linear-gradient(180deg, transparent, rgba(77,182,172,.09), transparent);
+  animation:scan 6.5s linear infinite; pointer-events:none;
+}
+@keyframes scan{ 0%{ top:-120px; } 100%{ top:100%; } }
+.term-bar{
+  display:flex; align-items:center; gap:8px;
+  padding:11px 14px; border-bottom:1px solid var(--line);
+  background:rgba(255,255,255,.02);
+}
+.dot{ width:10px; height:10px; border-radius:50%; }
+.dot.r{ background:#EF5350; } .dot.y{ background:#FFB74D; } .dot.g{ background:#4DB6AC; }
+.term-title{
+  margin-left:8px; font-family:var(--mono); font-size:11.5px; color:var(--ink-faint);
+  letter-spacing:.05em;
+}
+.term-body{
+  padding:20px 20px 24px; font-family:var(--mono);
+  font-size:12.5px; line-height:1.95; overflow-x:auto;
+}
+.js .term-body .ln{ white-space:pre; opacity:0; transform:translateY(4px); }
+.js .ln.on{ animation:lineIn .45s ease forwards; }
+@keyframes lineIn{ to{ opacity:1; transform:none; } }
+.c-dim{ color:var(--ink-faint); }
+.c-cmd{ color:var(--ink); }
+.c-ok{ color:var(--teal); }
+.c-warn{ color:var(--amber); }
+.c-bad{ color:var(--red); }
+.c-key{ color:var(--yellow); }
+.cursor{
+  display:inline-block; width:7px; height:14px; vertical-align:-2px;
+  background:var(--teal); animation:blink 1.1s step-end infinite;
+}
+@keyframes blink{ 50%{ opacity:0; } }
+
+/* ---------- 区块通用 ---------- */
+section{ padding:clamp(58px,8vw,104px) 0; border-top:1px solid var(--line); }
+.sec-head{ display:flex; align-items:baseline; gap:16px; margin-bottom:clamp(30px,4vw,48px); }
+.sec-num{
+  font-family:var(--mono); font-size:12px; color:var(--red);
+  letter-spacing:.14em; padding-top:3px; flex:none;
+}
+.sec-num::before{ content:"● "; }
+h2{
+  margin:0; font-size:clamp(24px,3vw,34px); font-weight:800;
+  letter-spacing:-.015em; line-height:1.35;
+}
+.sec-sub{ margin:10px 0 0; color:var(--ink-dim); font-size:15px; max-width:44em; }
+
+/* ---------- The Loop ---------- */
+.loop{ display:grid; gap:0; }
+.step{
+  display:grid; grid-template-columns:76px 1fr; gap:clamp(14px,3vw,34px);
+  padding:24px 0; border-bottom:1px dashed var(--line);
+  position:relative;
+}
+.step:last-child{ border-bottom:0; }
+.step-n{
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.16em;
+  color:var(--ink-faint); padding-top:5px;
+}
+.step:hover .step-n{ color:var(--teal); }
+.step h3{
+  margin:0 0 7px; font-size:17px; font-weight:700; letter-spacing:.01em;
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+}
+.step h3 .tag{
+  font-family:var(--mono); font-size:10.5px; font-weight:500;
+  letter-spacing:.12em; text-transform:uppercase;
+  color:var(--teal); border:1px solid rgba(77,182,172,.3);
+  border-radius:4px; padding:2px 7px; background:rgba(77,182,172,.08);
+}
+.step p{ margin:0; color:var(--ink-dim); font-size:14.5px; }
+.step p code{
+  font-family:var(--mono); font-size:.9em; color:var(--ink);
+  background:rgba(233,231,226,.06); padding:1px 5px; border-radius:4px;
+}
+
+/* ---------- 能力卡片 ---------- */
+.cards{
+  display:grid; grid-template-columns:repeat(3,1fr);
+  gap:1px; background:var(--line);
+  border:1px solid var(--line); border-radius:12px; overflow:hidden;
+}
+.card{
+  background:var(--bg-2); padding:clamp(20px,2.4vw,30px);
+  transition:background .25s;
+  position:relative;
+}
+.card:hover{ background:#171723; }
+.card::before{
+  content:""; position:absolute; left:0; top:0; bottom:0; width:2px;
+  background:var(--teal); opacity:0; transition:opacity .25s;
+}
+.card:hover::before{ opacity:1; }
+.card-i{ font-size:19px; margin-bottom:14px; display:block; line-height:1; color:var(--teal); }
+.card h3{ margin:0 0 8px; font-size:15px; font-weight:700; letter-spacing:.01em; }
+.card p{ margin:0; color:var(--ink-dim); font-size:13.5px; line-height:1.7; }
+.card p code{
+  font-family:var(--mono); font-size:.88em; color:var(--ink);
+  background:rgba(233,231,226,.06); padding:1px 4px; border-radius:3px;
+}
+.card .meta{
+  margin-top:14px; font-family:var(--mono); font-size:11px;
+  color:var(--ink-faint); letter-spacing:.06em;
+}
+
+/* ---------- 命令 ---------- */
+.cmd-wrap{
+  display:grid; grid-template-columns:1.25fr .75fr;
+  gap:clamp(24px,4vw,54px); align-items:start;
+}
+.cmd-grid{
+  display:grid; grid-template-columns:1fr 1fr;
+  gap:0 26px;
+}
+.cmd{
+  display:flex; gap:12px; align-items:baseline;
+  padding:9px 0; border-bottom:1px solid var(--line);
+}
+.cmd code{
+  font-family:var(--mono); font-size:13px; color:var(--ink);
+  white-space:nowrap; flex:none;
+}
+.cmd span{ font-size:12.5px; color:var(--ink-dim); text-align:right; margin-left:auto; }
+.matrix{
+  border:1px solid var(--line); border-radius:10px; overflow:hidden;
+  background:var(--bg-2);
+}
+.matrix h4{
+  margin:0; padding:14px 18px; font-family:var(--mono);
+  font-size:11.5px; letter-spacing:.14em; color:var(--ink-faint);
+  text-transform:uppercase; border-bottom:1px solid var(--line);
+}
+.mrow{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:11px 18px; border-bottom:1px solid var(--line); font-size:13.5px;
+}
+.mrow:last-child{ border-bottom:0; }
+.mrow b{ font-family:var(--mono); font-weight:500; font-size:13px; }
+.pill{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.08em;
+  padding:2px 9px; border-radius:999px; border:1px solid;
+}
+.p-full{ color:var(--teal); border-color:rgba(77,182,172,.35); background:rgba(77,182,172,.09); }
+.p-part{ color:var(--amber); border-color:rgba(255,183,77,.35); background:rgba(255,183,77,.09); }
+.p-no{ color:var(--ink-faint); border-color:var(--line-2); }
+
+/* ---------- 安装 ---------- */
+.install-note{
+  display:flex; gap:10px; align-items:flex-start;
+  margin-bottom:26px; padding:14px 16px;
+  border:1px solid rgba(255,183,77,.22); border-radius:8px;
+  background:rgba(255,183,77,.05);
+  font-size:13.5px; color:var(--ink-dim);
+}
+.install-note b{ color:var(--amber); }
+.install-note code{
+  font-family:var(--mono); font-size:.9em; color:var(--ink);
+  background:rgba(233,231,226,.06); padding:1px 5px; border-radius:4px;
+}
+.blocks{ display:grid; gap:16px; }
+.block{
+  border:1px solid var(--line); border-radius:10px; overflow:hidden;
+  background:var(--bg-2);
+}
+.block-h{
+  display:flex; align-items:center; gap:10px;
+  padding:10px 16px; border-bottom:1px solid var(--line);
+  background:rgba(255,255,255,.015);
+}
+.block-h b{
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.12em;
+  color:var(--ink-dim); font-weight:500; text-transform:uppercase;
+}
+.copy{
+  margin-left:auto; font-family:var(--mono); font-size:11px;
+  color:var(--ink-faint); background:none; border:1px solid var(--line-2);
+  border-radius:5px; padding:4px 10px; cursor:pointer;
+  transition:color .2s, border-color .2s;
+}
+.copy:hover{ color:var(--teal); border-color:rgba(77,182,172,.4); }
+.copy.done{ color:var(--teal); border-color:rgba(77,182,172,.4); }
+pre{
+  margin:0; padding:16px 18px; overflow-x:auto;
+  font-family:var(--mono); font-size:12.8px; line-height:1.85;
+  color:var(--ink);
+}
+pre .p{ color:var(--teal); user-select:none; }
+pre .cm{ color:var(--ink-faint); }
+
+/* ---------- 页脚 ---------- */
+footer{
+  border-top:1px solid var(--line);
+  padding:44px 0 54px;
+}
+.foot{
+  display:flex; flex-wrap:wrap; gap:20px; align-items:center;
+  justify-content:space-between;
+  color:var(--ink-faint); font-size:13px;
+}
+.foot a{ color:var(--ink-dim); text-decoration:none; border-bottom:1px solid var(--line-2); }
+.foot a:hover{ color:var(--teal); border-color:var(--teal); }
+.foot-mono{ font-family:var(--mono); font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; }
+
+/* ---------- 进场动画（仅 JS 可用时生效，避免无 JS 时内容不可见） ---------- */
+.js .reveal{ opacity:0; transform:translateY(16px); transition:opacity .7s ease, transform .7s ease; }
+.js .reveal.in{ opacity:1; transform:none; }
+.js .hero .reveal{ transition-delay:var(--d,0ms); }
+
+/* ---------- 响应式 ---------- */
+@media (max-width:980px){
+  .hero-grid{ grid-template-columns:1fr; }
+  .cards{ grid-template-columns:1fr 1fr; }
+  .cmd-wrap{ grid-template-columns:1fr; }
+}
+@media (max-width:760px){
+  .rail{ display:none; }
+  .wrap{ margin-left:0; }
+  .nav-links a:not(.nav-star){ display:none; }
+  .cards{ grid-template-columns:1fr; }
+  .cmd-grid{ grid-template-columns:1fr; }
+  .step{ grid-template-columns:44px 1fr; }
+  .term-body{ font-size:11.5px; }
+  h1{ font-size:clamp(30px,8.5vw,40px); }
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{ animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+  html{ scroll-behavior:auto; }
+  .js .reveal{ opacity:1; transform:none; }
+  .js .term-body .ln{ opacity:1; transform:none; }
+}
+</style>
+<script>
+/* 渐进增强：JS 可用才启用隐藏式进场动画；一旦脚本出错就摘掉 js 类，内容回归可见 */
+document.documentElement.classList.add('js');
+window.addEventListener('error', function(){ document.documentElement.classList.remove('js'); });
+</script>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+<div class="bg-noise"></div>
+
+<div class="rail" aria-hidden="true">
+  <div class="rail-word">OmniBreak</div>
+  <div class="rail-track"><div class="rail-fill" id="railFill"></div></div>
+  <div class="rail-bp"></div>
+</div>
+
+<div class="wrap">
+<header>
+  <div class="inner nav">
+    <a class="brand" href="#top">
+      <img src="brand-icon.png" alt="OmniBreak">
+      <b>OmniBreak</b>
+    </a>
+    <nav class="nav-links">
+      <a href="#loop">LOOP</a>
+      <a href="#power">能力</a>
+      <a href="#cmd">命令</a>
+      <a href="#install">安装</a>
+      <a class="nav-star" href="https://github.com/YuMinHui825/omnibreak-skill" target="_blank" rel="noopener">★ Star</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ============ HERO ============ -->
+<section class="hero" style="border-top:0">
+  <div class="inner hero-grid">
+    <div>
+      <div class="kicker reveal" style="--d:0ms">Remote Linux Debugger · Agent Skill</div>
+      <h1 class="reveal" style="--d:80ms">AI 写代码，<br><span class="hl">它让代码跑通</span>。</h1>
+      <p class="lede reveal" style="--d:160ms">
+        给你的 vibe coder 装个调试器。OmniBreak 把真实 Linux 机器接进 Agent 的闭环：
+        部署、打断点、抓崩溃、看火焰图、修完再验证。每条命令都返回 <code>JSON</code>。
+      </p>
+      <div class="cta-row reveal" style="--d:240ms">
+        <a class="btn btn-primary" href="https://github.com/YuMinHui825/omnibreak-skill" target="_blank" rel="noopener">★ 去 GitHub 点 Star</a>
+        <a class="btn btn-ghost" href="#install">↓ 一分钟装好</a>
+      </div>
+    </div>
+
+    <div class="term reveal" style="--d:320ms">
+      <div class="term-bar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="term-title">omnibreak — debug session</span>
+      </div>
+      <div class="term-body" id="term">
+        <div class="ln"><span class="c-dim">$</span> <span class="c-cmd">omnibreak launch --target 10.0.0.7 --binary /app/server</span></div>
+        <div class="ln">  <span class="c-ok">✓</span> <span class="c-dim">gdbserver up · pid 4821</span></div>
+        <div class="ln"><span class="c-dim">$</span> <span class="c-cmd">omnibreak break --file handler.c --line 342</span></div>
+        <div class="ln">  <span class="c-ok">✓</span> <span class="c-dim">breakpoint set</span></div>
+        <div class="ln"><span class="c-dim">$</span> <span class="c-cmd">omnibreak c</span></div>
+        <div class="ln">  <span class="c-warn">●</span> <span class="c-key">stopped</span> <span class="c-dim">handler.c:342</span></div>
+        <div class="ln">    <span class="c-dim">thread 1 · main</span></div>
+        <div class="ln">    <span class="c-dim">vars →</span> req=<span class="c-key">0x7f3a2c…</span>  len=<span class="c-bad">0</span>  fd=<span class="c-bad">-1</span></div>
+        <div class="ln">&#8203;</div>
+        <div class="ln"><span class="c-dim">$</span> <span class="c-cmd">omnibreak crash</span></div>
+        <div class="ln">  <span class="c-bad">✗ SIGSEGV</span> <span class="c-key">parse_config()</span> <span class="c-dim">main.c:88</span></div>
+        <div class="ln">    <span class="c-dim">#0 parse_config  main.c:88</span></div>
+        <div class="ln">    <span class="c-dim">#1 load_config   main.c:41</span></div>
+        <div class="ln"><span class="c-dim">$</span> <span class="cursor"></span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LOOP ============ -->
+<section id="loop">
+  <div class="inner">
+    <div class="sec-head reveal">
+      <div class="sec-num">01</div>
+      <div>
+        <h2>这不是补全，是一个能闭环的调试器</h2>
+        <p class="sec-sub">Agent 写完代码，剩下的事交给它。五步一轮，直到程序真的跑通。</p>
+      </div>
+    </div>
+
+    <div class="loop">
+      <div class="step reveal">
+        <div class="step-n">STEP 01</div>
+        <div>
+          <h3>部署 <span class="tag">Deploy</span></h3>
+          <p>编译带 <code>-g</code> 调试符号，<code>--deploy-source</code> 自动 SCP 到远程，启动 gdbserver。SSH、本地、<code>docker://</code> 三种目标。</p>
+        </div>
+      </div>
+      <div class="step reveal">
+        <div class="step-n">STEP 02</div>
+        <div>
+          <h3>打断点 <span class="tag">Break</span></h3>
+          <p>按 <code>file:line</code> 下断点，支持条件断点与读/写/访问监视点。也可以 <code>attach</code> 到已经在跑的服务上。</p>
+        </div>
+      </div>
+      <div class="step reveal">
+        <div class="step-n">STEP 03</div>
+        <div>
+          <h3>看现场 <span class="tag">Inspect</span></h3>
+          <p><code>continue</code> / <code>next</code> / <code>step</code> 一次调用就返回线程、栈帧、变量和源码上下文——不用再单独问一遍。</p>
+        </div>
+      </div>
+      <div class="step reveal">
+        <div class="step-n">STEP 04</div>
+        <div>
+          <h3>改代码 <span class="tag">Fix</span></h3>
+          <p>崩溃堆栈、变量值、内存泄漏曲线、CPU 热函数，全部映射回 <code>file:line</code>，Agent 拿着这些精确修源码。</p>
+        </div>
+      </div>
+      <div class="step reveal">
+        <div class="step-n">STEP 05</div>
+        <div>
+          <h3>验证 <span class="tag">Verify</span></h3>
+          <p>重新编译部署，用 <code>stats</code> 和 <code>diff</code> 量化修复前后：CPU% 降了多少、RSS 少了多少 MB。然后进入下一轮。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 能力 ============ -->
+<section id="power">
+  <div class="inner">
+    <div class="sec-head reveal">
+      <div class="sec-num">02</div>
+      <div>
+        <h2>它在真实机器上能看见什么</h2>
+        <p class="sec-sub">不是模拟，不是猜测。GDB/MI、ftrace、Perfetto 采集到的原始事实。</p>
+      </div>
+    </div>
+
+    <div class="cards">
+      <div class="card reveal">
+        <span class="card-i">●</span>
+        <h3>崩溃回溯</h3>
+        <p>每一帧都带 <code>file:line</code>，最多 500 帧。信号、崩溃线程、寄存器一并在内。</p>
+        <div class="meta">crash · coredump</div>
+      </div>
+      <div class="card reveal">
+        <span class="card-i">◍</span>
+        <h3>内存泄漏</h3>
+        <p>堆采样追踪增长，风险从 none 一路升到 high。配合 Perfetto heapprofd 看原生堆分配火焰图。</p>
+        <div class="meta">leaks · trace --heap-profile</div>
+      </div>
+      <div class="card reveal">
+        <span class="card-i">▲</span>
+        <h3>CPU / GPU 火焰图</h3>
+        <p>100Hz 采样生成火焰图，自动探测 GPU ftrace 事件，输出 Top-10 热点函数。</p>
+        <div class="meta">trace · ui.perfetto.dev</div>
+      </div>
+      <div class="card reveal">
+        <span class="card-i">◆</span>
+        <h3>I/O 归因</h3>
+        <p>线程卡在 D 状态时，直接告诉你阻塞在哪个内核函数、读了多少字节、是哪个 inode 在拖。</p>
+        <div class="meta">sched_blocked_reason · block_rq_issue</div>
+      </div>
+      <div class="card reveal">
+        <span class="card-i">⌁</span>
+        <h3>Sanitizer</h3>
+        <p>解析 ASan / UBSan / TSan 输出，定位越界、未定义行为、数据竞争到具体行号。</p>
+        <div class="meta">sanitize · --asan / --ubsan / --tsan</div>
+      </div>
+      <div class="card reveal">
+        <span class="card-i">▣</span>
+        <h3>事后分析</h3>
+        <p>拿着 core dump 离线定位崩溃点，不需要 daemon、不需要 SSH、不需要重启服务。</p>
+        <div class="meta">coredump --binary --core</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 命令 ============ -->
+<section id="cmd">
+  <div class="inner">
+    <div class="sec-head reveal">
+      <div class="sec-num">03</div>
+      <div>
+        <h2>命令就是接口</h2>
+        <p class="sec-sub">全部输出 JSON 到 stdout，人类可读日志走 stderr。Agent 直接解析 <code>ok</code> 字段。</p>
+      </div>
+    </div>
+
+    <div class="cmd-wrap">
+      <div class="cmd-grid reveal">
+        <div class="cmd"><code>daemon</code><span>后台常驻</span></div>
+        <div class="cmd"><code>launch</code><span>部署并启动</span></div>
+        <div class="cmd"><code>attach</code><span>附到进程</span></div>
+        <div class="cmd"><code>break</code><span>下断点</span></div>
+        <div class="cmd"><code>watch</code><span>监视点</span></div>
+        <div class="cmd"><code>continue</code><span>跑到断点</span></div>
+        <div class="cmd"><code>next / step</code><span>单步</span></div>
+        <div class="cmd"><code>status</code><span>线程 · 栈 · 变量</span></div>
+        <div class="cmd"><code>crash</code><span>崩溃堆栈</span></div>
+        <div class="cmd"><code>eval</code><span>求值表达式</span></div>
+        <div class="cmd"><code>stats</code><span>CPU / RSS / 线程</span></div>
+        <div class="cmd"><code>leaks</code><span>泄漏检测</span></div>
+        <div class="cmd"><code>diff</code><span>修复前后对比</span></div>
+        <div class="cmd"><code>trace</code><span>Perfetto 采集</span></div>
+        <div class="cmd"><code>sanitize</code><span>解析 Sanitizer</span></div>
+        <div class="cmd"><code>coredump</code><span>离线分析</span></div>
+        <div class="cmd"><code>report</code><span>诊断报告</span></div>
+        <div class="cmd"><code>logs</code><span>远程日志</span></div>
+        <div class="cmd"><code>deploy</code><span>SCP 传输</span></div>
+        <div class="cmd"><code>health</code><span>daemon 状态</span></div>
+      </div>
+
+      <div class="matrix reveal">
+        <h4>Language Support</h4>
+        <div class="mrow"><b>C</b><span class="pill p-full">完整</span></div>
+        <div class="mrow"><b>C++</b><span class="pill p-full">完整</span></div>
+        <div class="mrow"><b>Rust</b><span class="pill p-full">完整</span></div>
+        <div class="mrow"><b>Go</b><span class="pill p-part">基础</span></div>
+        <div class="mrow"><b>Python</b><span class="pill p-no">不支持</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 安装 ============ -->
+<section id="install">
+  <div class="inner">
+    <div class="sec-head reveal">
+      <div class="sec-num">04</div>
+      <div>
+        <h2>两条命令装完</h2>
+        <p class="sec-sub">目标机装 gdbserver，本机装 CLI。已带预编译 JS，不需要 TypeScript 构建。</p>
+      </div>
+    </div>
+
+    <div class="install-note reveal">
+      <span>▸</span>
+      <div><b>目标是 Linux 机器。</b>目标机只需 <code>gdbserver</code> + <code>gdb-multiarch</code>，launch / attach 会自动拉起，不用手动跑。</div>
+    </div>
+
+    <div class="blocks">
+      <div class="block reveal">
+        <div class="block-h"><b>目标机 · 一次性</b><button class="copy" data-copy="sudo apt install -y gdbserver gdb-multiarch">复制</button></div>
+        <pre><span class="p">$</span> sudo apt install -y gdbserver gdb-multiarch</pre>
+      </div>
+
+      <div class="block reveal">
+        <div class="block-h"><b>本机 · 安装 CLI</b><button class="copy" data-copy="git clone https://github.com/YuMinHui825/omnibreak-skill.git
+cd omnibreak-skill
+npm install --production &amp;&amp; npm link">复制</button></div>
+        <pre><span class="p">$</span> git clone https://github.com/YuMinHui825/omnibreak-skill.git
+<span class="p">$</span> cd omnibreak-skill
+<span class="p">$</span> npm install --production &amp;&amp; npm link</pre>
+      </div>
+
+      <div class="block reveal">
+        <div class="block-h"><b>Claude Code · 加为 Skill</b><button class="copy" data-copy="mkdir -p ~/.claude/skills/omnibreak
+cp SKILL.md ~/.claude/skills/omnibreak/SKILL.md">复制</button></div>
+        <pre><span class="p">$</span> mkdir -p ~/.claude/skills/omnibreak
+<span class="p">$</span> cp SKILL.md ~/.claude/skills/omnibreak/SKILL.md
+<span class="cm"># 重启 Claude Code 生效</span></pre>
+      </div>
+    </div>
+
+    <p class="sec-sub reveal" style="margin-top:26px">
+      装完之后，你只需要说一句「这里崩了」，Agent 会自己问齐 IP、二进制路径、构建命令，然后开始循环。
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="inner foot">
+    <div>
+      <div class="foot-mono">OmniBreak Skill · v0.9.0 · MIT</div>
+      <div style="margin-top:6px">远程 Linux 调试 CLI + Agent Skill。<a href="https://github.com/YuMinHui825/omnibreak-skill" target="_blank" rel="noopener">GitHub 仓库</a> · 作者 <a href="https://github.com/YuMinHui825" target="_blank" rel="noopener">shibu</a></div>
+    </div>
+    <a class="btn btn-ghost" href="https://github.com/YuMinHui825/omnibreak-skill" target="_blank" rel="noopener">★ 点个 Star 支持一下</a>
+  </div>
+</footer>
+</div>
+
+<script>
+(function(){
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* 终端逐行出现 */
+  var lines = document.querySelectorAll('#term .ln');
+  lines.forEach(function(el, i){
+    if (reduce) { el.classList.add('on'); return; }
+    setTimeout(function(){ el.classList.add('on'); }, 380 + i * 90);
+  });
+
+  /* 滚动进场 */
+  var targets = document.querySelectorAll('.reveal');
+  if (!('IntersectionObserver' in window)) {
+    targets.forEach(function(el){ el.classList.add('in'); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    targets.forEach(function(el){ io.observe(el); });
+  }
+
+  /* 左侧进度轨 */
+  var fill = document.getElementById('railFill');
+  function onScroll(){
+    var h = document.documentElement.scrollHeight - window.innerHeight;
+    var p = h > 0 ? window.scrollY / h : 0;
+    fill.style.height = Math.min(100, Math.max(0, p * 100)) + '%';
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  /* 复制按钮 */
+  document.querySelectorAll('.copy').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var text = btn.getAttribute('data-copy').replace(/&amp;/g, '&');
+      var done = function(){
+        btn.textContent = '已复制';
+        btn.classList.add('done');
+        setTimeout(function(){ btn.textContent = '复制'; btn.classList.remove('done'); }, 1600);
+      };
+      function fallback(){
+        var ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); done(); } catch(e){}
+        document.body.removeChild(ta);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(fallback);
+      } else { fallback(); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
